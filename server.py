@@ -276,6 +276,10 @@ async def handler(websocket):
                         new_state['online'] = gs.get('online', {'w': True, 'b': True})
                         new_state['opponent_joined'] = True
                         new_state['game_started'] = True
+                        new_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', False)
+                        new_state['disable_undo_placeholder'] = gs.get('disable_undo_placeholder', False)
+                        new_state['score_to_win'] = gs.get('score_to_win', False)
+                        new_state['ice_king_enabled'] = gs.get('ice_king_enabled', False)
                         new_state['turn_start_snapshot'] = copy.deepcopy(new_state)
                         games[room_code] = new_state
 

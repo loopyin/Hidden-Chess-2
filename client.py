@@ -3240,7 +3240,7 @@ async def game_loop():
                         client_state['last_sq_click_time'] = now
                         client_state['last_sq_click_coord'] = (r, c)
                         
-                        if gs.get('disable_undo_placeholder', False) and prev_coord == (r, c) and (now - prev_time) <= 0.35:
+                        if client_state.get('disable_undo_placeholder', gs.get('disable_undo_placeholder', False)) and prev_coord == (r, c) and (now - prev_time) <= 0.35:
                             h_active = client_state.get('history_active', False)
                             q_key_dc = f'next_queue_{gs["turn"]}'
                             temp_end_en = not h_active and gs['turn'] == active_color and (gs['normal_done'] or gs.get('hidden_count', 0) > 0 or gs.get(q_key_dc))
@@ -3354,6 +3354,13 @@ async def game_loop():
                                 gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
                             sel, legs = get_ui_selection(gs_temp, r, c, draft_moves=client_state.get('draft_moves', []))
                             if sel is not None:
+                                if client_state.get('fakeout_triggered'):
+                                    await MechanicsManager.execute_toggle_fakeout(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None)
+                                elif client_state.get('hidden_triggered'):
+                                    await MechanicsManager.execute_toggle_hidden(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None)
+                                client_state['hidden_triggered'] = False
+                                client_state['fakeout_triggered'] = False
+                                
                                 client_state['selected'] = sel
                                 client_state['legal_sq'] = legs
                                 play_sound('select')
@@ -3573,13 +3580,20 @@ async def game_loop():
                                             client_state['legal_sq'] = []
                                             gs['hidden_mode'] = False
                                         else:
+                                            is_hidden_cmd = gs.get('hidden_mode', False) or client_state.get('hidden_triggered', False)
+                                            is_fakeout_cmd = gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False)
                                             move_cmd = {
                                                 "type": "action", "action": "move",
-                                                "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo
+                                                "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo,
+                                                "gesture_hidden": is_hidden_cmd,
+                                                "gesture_fakeout": is_fakeout_cmd
                                             }
                                             await websocket.send(json.dumps(move_cmd))
                                             client_state['selected'] = None
                                             client_state['legal_sq'] = []
+                                            client_state['is_dragging_gesture'] = False
+                                            client_state['hidden_triggered'] = False
+                                            client_state['fakeout_triggered'] = False
                             else:
                                 gs_temp = copy.copy(gs)
                                 gs_temp['drafting_active'] = client_state.get('drafting', False)
