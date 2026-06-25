@@ -2741,41 +2741,41 @@ async def game_loop():
                                             "ice_king_enabled": new_val
                                         }))
 
-                        elif play_btn_rect.collidepoint((mx, my)):
-                            if client_state.get('is_local', False):
-                                gs['game_started'] = True
-                                gs['fakeout_mode_enabled'] = client_state.get('fakeout_mode_enabled', False)
-                                gs['disable_undo_placeholder'] = client_state.get('disable_undo_placeholder', False)
-                                gs['score_to_win'] = client_state.get('score_to_win', False)
-                                gs['ice_king_enabled'] = client_state.get('ice_king_enabled', False)
-                                client_state['turn_start_snapshot'] = copy.deepcopy(gs)
-                                client_state['turn_history'] = [copy.deepcopy(gs)]
-                                client_state['history_index'] = 0
-                                if client_state.get('is_test'):
-                                    client_state['absolute_history'] = []
-                                app_state = "PLAYING"
-                                play_sound('start')
-                                if client_state.get('is_test'):
-                                    pygame.display.set_caption("Hidden Chess - Partida Teste")
-                                else:
-                                    pygame.display.set_caption("Hidden Chess - Partida Local")
+                    if play_btn_rect.collidepoint((mx, my)):
+                        if client_state.get('is_local', False):
+                            gs['game_started'] = True
+                            gs['fakeout_mode_enabled'] = client_state.get('fakeout_mode_enabled', False)
+                            gs['disable_undo_placeholder'] = client_state.get('disable_undo_placeholder', False)
+                            gs['score_to_win'] = client_state.get('score_to_win', False)
+                            gs['ice_king_enabled'] = client_state.get('ice_king_enabled', False)
+                            client_state['turn_start_snapshot'] = copy.deepcopy(gs)
+                            client_state['turn_history'] = [copy.deepcopy(gs)]
+                            client_state['history_index'] = 0
+                            if client_state.get('is_test'):
+                                client_state['absolute_history'] = []
+                            app_state = "PLAYING"
+                            play_sound('start')
+                            if client_state.get('is_test'):
+                                pygame.display.set_caption("Hidden Chess - Partida Teste")
                             else:
-                                if client_state.get('my_color') == 'b':
-                                    new_ready = not gs.get('guest_ready', False)
+                                pygame.display.set_caption("Hidden Chess - Partida Local")
+                        else:
+                            if client_state.get('my_color') == 'b':
+                                new_ready = not gs.get('guest_ready', False)
+                                if websocket:
+                                    await websocket.send(json.dumps({
+                                        "type": "action",
+                                        "action": "set_ready",
+                                        "guest_ready": new_ready
+                                    }))
+                                    play_sound('click')
+                            elif client_state.get('my_color') == 'w':
+                                if gs.get('opponent_joined', False) and gs.get('guest_ready', False):
                                     if websocket:
                                         await websocket.send(json.dumps({
                                             "type": "action",
-                                            "action": "set_ready",
-                                            "guest_ready": new_ready
+                                            "action": "start_game"
                                         }))
-                                        play_sound('click')
-                                elif client_state.get('my_color') == 'w':
-                                    if gs.get('opponent_joined', False) and gs.get('guest_ready', False):
-                                        if websocket:
-                                            await websocket.send(json.dumps({
-                                                "type": "action",
-                                                "action": "start_game"
-                                            }))
 
             elif app_state == "PLAYING":
                 is_local = client_state.get('is_local', False)
