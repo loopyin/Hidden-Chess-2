@@ -230,25 +230,11 @@ async def sync_gesture_begin(websocket, client_state, *, timer=0.0, source_sq=No
         source_piece=source_piece,
     )
     client_state['gesture_state'] = gesture_state
-    if websocket and not client_state.get('is_local', False):
-        try:
-            await websocket.send(json.dumps({
-                'type': 'action',
-                'action': 'gesture_begin',
-                'gesture_state': gesture_state,
-            }))
-        except Exception:
-            pass
     return gesture_state
 
 
 async def sync_gesture_cancel(websocket, client_state):
     client_state['gesture_state'] = default_gesture_state()
-    if websocket and not client_state.get('is_local', False):
-        try:
-            await websocket.send(json.dumps({'type': 'action', 'action': 'gesture_cancel'}))
-        except Exception:
-            pass
 
 
 def draw_rect_aa(surf, color, rect, radius=5, border=0):
@@ -1720,9 +1706,13 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             if client_state.get('drafting'):
                 is_hidden_move = client_state.get('draft_hidden', False) or client_state.get('hidden_triggered', False)
                 is_fakeout_move = client_state.get('draft_fakeout', False) or client_state.get('fakeout_triggered', False)
+                if is_fakeout_move:
+                    is_hidden_move = False
             else:
                 is_hidden_move = gs.get('hidden_mode', False) or client_state.get('hidden_triggered', False)
                 is_fakeout_move = gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False)
+                if is_fakeout_move:
+                    is_hidden_move = False
 
             if client_state.get('drafting'):
                 d_moves = client_state.get('draft_moves', [])
@@ -1834,8 +1824,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                         "type": "action", "action": "move",
                         "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo, 
                         "gesture_hidden": is_hidden_move,
-                        "gesture_fakeout": is_fakeout_move,
-                        "gesture_state": client_state.get('gesture_state', default_gesture_state())
+                        "gesture_fakeout": is_fakeout_move
                     }
                     await websocket.send(json.dumps(move_cmd))
                     client_state['selected'] = None
@@ -2058,6 +2047,7 @@ async def game_loop():
             if client_state['gesture_timer'] >= 6.0 and not client_state.get('fakeout_triggered'):
                 if MechanicsManager.can_toggle_fakeout(gs, client_state):
                     client_state['fakeout_triggered'] = True
+                    client_state['hidden_triggered'] = False
                     mx, my = client_state.get('drag_pos', (0,0))
                     await MechanicsManager.execute_toggle_fakeout(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True, skip_ws=True)
                     await sync_gesture_begin(websocket, client_state, timer=client_state['gesture_timer'], source_sq=client_state.get('drag_piece_sq'), source_piece=client_state.get('drag_piece_name'))
@@ -3619,8 +3609,7 @@ async def game_loop():
                                                 "type": "action", "action": "move",
                                                 "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo,
                                                 "gesture_hidden": is_hidden_cmd,
-                                                "gesture_fakeout": is_fakeout_cmd,
-                                                "gesture_state": client_state.get('gesture_state', default_gesture_state())
+                                                "gesture_fakeout": is_fakeout_cmd
                                             }
                                             await websocket.send(json.dumps(move_cmd))
                                             client_state['selected'] = None
