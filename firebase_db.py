@@ -1,6 +1,6 @@
-import requests
+import aiohttp
+import asyncio
 import json
-import threading
 import time
 import copy
 from debug_utils import check_invariants, log_minimal_snapshot
@@ -19,50 +19,52 @@ class FirebaseClient:
         self.color = None
         self.token = None
         self.polling = False
-        self.thread = None
+        self.poll_task = None
         self.on_state_update = None
         self.on_error = None
         self.last_update_time = None
         
-    def _poll(self):
-        while self.polling:
-            if not self.room_code:
-                time.sleep(1)
-                continue
-                
-            url = f"{BASE_URL}/{self.room_code}?key={API_KEY}"
-            try:
-                resp = requests.get(url, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    update_time = data.get("updateTime")
-                    if update_time != self.last_update_time:
-                        self.last_update_time = update_time
-                        fields = data.get("fields", {})
-                        if "state" in fields:
-                            state_str = fields["state"].get("stringValue")
-                            if state_str:
-                                try:
-                                    if self.on_state_update:
-                                        self.on_state_update(state_str)
-                                except Exception as e:
-                                    print("Error in callback:", e)
-            except Exception as e:
-                print("Polling error:", e)
-                
-            time.sleep(1.0)
+    async def _poll(self):
+        async with aiohttp.ClientSession() as session:
+            while self.polling:
+                if not self.room_code:
+                    await asyncio.sleep(1)
+                    continue
+                    
+                url = f"{BASE_URL}/{self.room_code}?key={API_KEY}"
+                try:
+                    async with session.get(url, timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            update_time = data.get("updateTime")
+                            if update_time != self.last_update_time:
+                                self.last_update_time = update_time
+                                fields = data.get("fields", {})
+                                if "state" in fields:
+                                    state_str = fields["state"].get("stringValue")
+                                    if state_str:
+                                        try:
+                                            if self.on_state_update:
+                                                self.on_state_update(state_str)
+                                        except Exception as e:
+                                            print("Error in callback:", e)
+                except Exception as e:
+                    print("Polling error:", e)
+                    
+                await asyncio.sleep(1.0)
             
     def start_polling(self, on_state_update, on_error=None):
         self.on_state_update = on_state_update
         self.on_error = on_error
         self.polling = True
-        self.thread = threading.Thread(target=self._poll, daemon=True)
-        self.thread.start()
+        self.poll_task = asyncio.create_task(self._poll())
         
     def stop_polling(self):
         self.polling = False
+        if self.poll_task:
+            self.poll_task.cancel()
         
-    def create_room(self, room_code, token, initial_state_json):
+    async def create_room(self, room_code, token, initial_state_json):
         url = f"{BASE_URL}?documentId={room_code}&key={API_KEY}"
         doc = {
             "fields": {
@@ -76,51 +78,53 @@ class FirebaseClient:
                 }
             }
         }
-        resp = requests.post(url, json=doc)
-        return resp.status_code == 200
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=doc) as resp:
+                return resp.status == 200
 
-    def join_room(self, room_code, token):
+    async def join_room(self, room_code, token):
         url = f"{BASE_URL}/{room_code}?key={API_KEY}"
-        resp = requests.get(url)
-        if resp.status_code != 200:
-            return False, "Sala não encontrada"
-            
-        data = resp.json()
-        fields = data.get("fields", {})
-        tokens = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return False, "Sala não encontrada"
+                    
+                data = await resp.json()
+                fields = data.get("fields", {})
+                tokens = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
+                
+                if "b" not in tokens:
+                    # We can join as black
+                    tokens["b"] = {"stringValue": token}
+                    
+                    # Update opponent_joined inside state
+                    state_str = fields.get("state", {}).get("stringValue", "{}")
+                    try:
+                        state_dict = json.loads(state_str)
+                        state_dict["opponent_joined"] = True
+                        fields["state"] = {"stringValue": json.dumps(state_dict)}
+                    except Exception:
+                        pass
         
-        if "b" not in tokens:
-            # We can join as black
-            tokens["b"] = {"stringValue": token}
+                    # Update the doc
+                    doc = {
+                        "fields": {
+                            "state": fields.get("state"),
+                            "tokens": {"mapValue": {"fields": tokens}}
+                        }
+                    }
+                    async with session.patch(url, json=doc) as patch_resp:
+                        if patch_resp.status == 200:
+                            return True, {"color": "b"}
+                    return False, "Erro ao entrar na sala"
+                else:
+                    if tokens.get("w", {}).get("stringValue") == token:
+                        return True, {"color": "w", "reconnected": True}
+                    if tokens.get("b", {}).get("stringValue") == token:
+                        return True, {"color": "b", "reconnected": True}
+                    return False, "Sala cheia"
             
-            # Update opponent_joined inside state
-            state_str = fields.get("state", {}).get("stringValue", "{}")
-            try:
-                state_dict = json.loads(state_str)
-                state_dict["opponent_joined"] = True
-                fields["state"] = {"stringValue": json.dumps(state_dict)}
-            except Exception:
-                pass
-
-            # Update the doc
-            doc = {
-                "fields": {
-                    "state": fields.get("state"),
-                    "tokens": {"mapValue": {"fields": tokens}}
-                }
-            }
-            patch_resp = requests.patch(url, json=doc)
-            if patch_resp.status_code == 200:
-                return True, {"color": "b"}
-            return False, "Erro ao entrar na sala"
-        else:
-            if tokens.get("w", {}).get("stringValue") == token:
-                return True, {"color": "w", "reconnected": True}
-            if tokens.get("b", {}).get("stringValue") == token:
-                return True, {"color": "b", "reconnected": True}
-            return False, "Sala cheia"
-            
-    def update_state(self, room_code, state_json, token, color):
+    async def update_state(self, room_code, state_json, token, color):
         # We need to preserve the tokens field when patching
         url = f"{BASE_URL}/{room_code}?updateMask.fieldPaths=state&key={API_KEY}"
         doc = {
@@ -129,8 +133,9 @@ class FirebaseClient:
                 "state": {"stringValue": state_json}
             }
         }
-        resp = requests.patch(url, json=doc)
-        return resp.status_code == 200
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(url, json=doc) as resp:
+                return resp.status == 200
 
     def leave_room(self, room_code):
         # We could delete the room if empty, or just leave it

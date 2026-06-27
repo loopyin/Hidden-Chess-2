@@ -1860,8 +1860,10 @@ async def connect_and_join(uri, action, room_code=None, token=None):
             await ws.send(json.dumps({"type": "join_room", "room": room_code, "session_token": token}))
         return ws
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print("Connection error:", e)
-        return None
+        return e
 
 async def game_loop():
     global WIN_W, WIN_H, PORTRAIT

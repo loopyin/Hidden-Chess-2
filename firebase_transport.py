@@ -44,7 +44,7 @@ class MockWebsocket:
             
             # Save to Firebase
             initial_state_json = json.dumps(serialize_state(self.gs, 'w'))
-            firebase_client.create_room(self.room_code, self.token, initial_state_json)
+            await firebase_client.create_room(self.room_code, self.token, initial_state_json)
             
             # Start listening to firebase
             self._start_listening()
@@ -57,7 +57,7 @@ class MockWebsocket:
             self.room_code = data['room'].upper()
             self.token = data.get('session_token') or ''.join(random.choices(string.ascii_letters + string.digits, k=16))
             
-            success, result = firebase_client.join_room(self.room_code, self.token)
+            success, result = await firebase_client.join_room(self.room_code, self.token)
             if success:
                 self.color = result['color']
                 self._start_listening()
@@ -297,7 +297,7 @@ class MockWebsocket:
     def _broadcast_state(self):
         # Update Firebase and local queue
         state_json = json.dumps(serialize_state(self.gs, self.color))
-        firebase_client.update_state(self.room_code, state_json, self.token, self.color)
+        asyncio.create_task(firebase_client.update_state(self.room_code, state_json, self.token, self.color))
         asyncio.create_task(self.queue.put(json.dumps({
             "type": "state_update",
             "state": serialize_state(self.gs, self.color)
@@ -313,12 +313,11 @@ class MockWebsocket:
                 new_gs = deserialize_state(state_dict)
                 self.gs = new_gs
                 # Push to asyncio queue for the client to process
-                asyncio.run_coroutine_threadsafe(
+                asyncio.create_task(
                     self.queue.put(json.dumps({
                         "type": "state_update",
                         "state": state_dict
-                    })), 
-                    asyncio.get_event_loop()
+                    }))
                 )
             except Exception as e:
                 print("Error in on_update", e)
