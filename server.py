@@ -358,7 +358,10 @@ async def handler(websocket):
                     if gs['turn'] != color and not gs.get('debug_mode_enabled', False):
                         continue
 
-                    effective_color = color
+                    if gs.get('debug_mode_enabled', False):
+                        effective_color = gs['turn']
+                    else:
+                        effective_color = color
 
                     if action == 'undo' and gs.get('disable_undo_placeholder', False):
                         continue

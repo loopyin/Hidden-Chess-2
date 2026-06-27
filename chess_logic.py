@@ -187,23 +187,15 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
 
 
 def legal(gs, row, fc):
-    is_debug = gs.get('debug_mode_enabled', False)
-    turn_color = gs['turn']
-    
-    # In debug mode, we can pick pieces from any color
-    tb = get_true_board(gs, turn_color)
-    abs_b = get_absolute_board(gs)
-    p = tb[row][fc]
-    if not p: return []
-    
-    # In debug mode, color is the piece's color. Otherwise it's the current turn color.
-    c = pc(p) if is_debug else turn_color
-    
+    c = gs['turn']
     if (row, fc) in gs.get('frozen_pieces', set()):
         return []
-        
+    tb = get_true_board(gs, c)
+    abs_b = get_absolute_board(gs)
+    p = tb[row][fc]
     res = []
-    
+    if not p: return res
+
     my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
     if gs.get('fakeout_active') and (row, fc) in my_hidden:
         val = my_hidden[(row, fc)]
@@ -664,22 +656,14 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
 
 
 def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
-    is_debug = gs.get('debug_mode_enabled', False)
     board = gs['board']
-    
-    # Need piece to determine color for move execution if in debug mode
-    # Assuming board state is already correct (abs_b or tb)
-    p = board[fr][fc]
-    if not p: return False
-    
-    turn_color = gs['turn']
-    c = pc(p) if is_debug else turn_color
-    
+    c = gs['turn']
     my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
     enemy_hidden = gs['hidden_b'] if c == 'w' else gs['hidden_w']
-    
+
     abs_b = get_absolute_board(gs)
-    tb = get_true_board(gs, turn_color)
+    tb = get_true_board(gs, c)
+    p = tb[fr][fc]
 
     is_fakeout = gs.get('fakeout_active', False)
     if is_fakeout and (tr, tc) not in legal(gs, fr, fc):
@@ -701,16 +685,21 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
 
     if ghost_found is not None:
         # A ghost capture occurred!
+        # 1. The captured piece disappears from the public board
         board[tr][tc] = None
+        # 2. In enemy_hidden, clear pub_pos to None
         val = enemy_hidden[ghost_found]
         is_f = val.is_fakeout
         enemy_hidden[ghost_found] = PieceMetaModifier(pub_pos=None, piece=val.piece, path=val.path, is_fakeout=val.is_fakeout, fakeout_path=val.fakeout_path, plies=val.plies)
+        # 3. Add to the log
         if is_f:
             gs['log'].append(f"SYS_FAKEOUT|Ilusão desfeita em {alg(tc, tr)}!")
         else:
             gs['log'].append(f"SYS_HIDDEN|Ilusão desfeita em {alg(tc, tr)}!")
+        # 4. Set the ghost_capture_flash coordinate
         gs['ghost_capture_flash'] = (tr, tc)
         gs['ghost_capture_type'] = 'fakeout' if is_f else 'hidden'
+        # 5. Return a special status "ghost_capture" and keep the active player's turn to redo their move.
         return "ghost_capture"
 
     def get_dir(a, b):
@@ -721,16 +710,21 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
 
     if t == 'K' and abs(cfc - tc) == 2:
         step = 1 if tc > cfc else -1
+
         check_cols = [cfc + step, cfc + 2 * step]
+
         if tc == 2:
             check_cols.append(1)
+
         for col in check_cols:
             if (cfr, col) in enemy_hidden:
                 collision = (cfr, col)
                 break
+
     elif t not in ('N', 'K'):
         dr, dc = get_dir(cfr, tr), get_dir(cfc, tc)
         r, cc = cfr + dr, cfc + dc
+
         while 0 <= r < 8 and 0 <= cc < 8:
             if (r, cc) in enemy_hidden:
                 collision = (r, cc)
@@ -749,13 +743,16 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         pub_pos, hp = val.pub_pos, val.piece
         is_f = val.is_fakeout
         deactivate_plies(gs, val.plies)
+
         if pub_pos: board[pub_pos[0]][pub_pos[1]] = None
         board[cr][cc] = hp
+
         if is_f:
             gs['log'].append(f"SYS_FAKEOUT|Peça oculta avistada em {alg(cc, cr)}!")
         else:
             gs['log'].append(f"SYS_HIDDEN|Peça oculta avistada em {alg(cc, cr)}!")
-        if 'reveal_flashes' not in gs: gs['reveal_flashes'] = []
+        if 'reveal_flashes' not in gs:
+            gs['reveal_flashes'] = []
         gs['reveal_flashes'].append([cr, cc, 'fakeout' if is_f else 'hidden'])
         return False
 
@@ -781,50 +778,70 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         gs['pts'][c] -= cost
         gs['fakeout_count'] = gs.get('fakeout_count', 0) + 1
 
+        # Clear starting spot on public board
         was_previously_hidden = (fr, fc) in my_hidden
         if was_previously_hidden:
             val = my_hidden.pop((fr, fc))
             old_pub_pos = val.pub_pos
             path = val.path if val.path else [(fr, fc)]
             prev_plies = val.plies
-            if old_pub_pos: board[old_pub_pos[0]][old_pub_pos[1]] = None
+            if old_pub_pos:
+                board[old_pub_pos[0]][old_pub_pos[1]] = None
         else:
             old_pub_pos = (fr, fc)
             path = [(fr, fc)]
             prev_plies = []
             board[fr][fc] = None
 
+        # Place fakeout piece on target square on public board
         board[tr][tc] = p
+
         gs['log'].append(f'FAKEOUT|{c}|{note}')
         ply_idx = len(gs['log'])
-        if 'shadow_history' not in gs: gs['shadow_history'] = {}
-        gs['shadow_history'][ply_idx] = {'type': 'FAKEOUT', 'color': c, 'note': note, 'active': True}
+        if 'shadow_history' not in gs:
+            gs['shadow_history'] = {}
+        gs['shadow_history'][ply_idx] = {
+            'type': 'FAKEOUT',
+            'color': c,
+            'note': note,
+            'active': True
+        }
 
+        # Put in my_hidden: true_pos remains at (fr, fc), pub_pos becomes (tr, tc), is_fakeout = True
         if was_previously_hidden:
             prev_f_path = val.fakeout_path if val.fakeout_path else []
-            if not prev_f_path: prev_f_path = [old_pub_pos] if old_pub_pos else []
+            if not prev_f_path:
+                prev_f_path = [old_pub_pos] if old_pub_pos else []
             new_f_path = list(prev_f_path)
-            if (tr, tc) not in new_f_path: new_f_path.append((tr, tc))
+            if (tr, tc) not in new_f_path:
+                new_f_path.append((tr, tc))
             my_hidden[(fr, fc)] = PieceMetaModifier(pub_pos=(tr, tc), piece=p, path=path, is_fakeout=True, fakeout_path=new_f_path, plies=prev_plies + [ply_idx])
         else:
             my_hidden[(fr, fc)] = PieceMetaModifier(pub_pos=(tr, tc), piece=p, path=[], is_fakeout=True, fakeout_path=[(fr, fc), (tr, tc)], plies=prev_plies + [ply_idx])
 
+        # Handle captured ghost/real piece at destination on public board
         for t_pos, val in enemy_hidden.items():
-            if val.pub_pos == (tr, tc):
+            p_pos = val.pub_pos
+            if p_pos == (tr, tc):
+                hp = val.piece
                 enemy_path = val.path
                 is_f = val.is_fakeout
-                enemy_hidden[t_pos] = PieceMetaModifier(pub_pos=None, piece=val.piece, path=enemy_path, is_fakeout=is_f, fakeout_path=[], plies=[])
-                break
-    else:
-        do_move(board, cfr, cfc, tr, tc, gs['ep'], gs['cr'], promo)
-        clear_gesture_state(gs)
-        gs['last_move'] = (cfr, cfc, tr, tc)
+                enemy_hidden[t_pos] = PieceMetaModifier(pub_pos=None, piece=hp, path=enemy_path, is_fakeout=is_f, fakeout_path=[], plies=[])
+
+        gs['captured_w'].discard((tr, tc))
+        gs['captured_b'].discard((tr, tc))
+
+        # ep and castling rights updates
         gs['ep'] = None
-        if t == 'P' and abs(tr - cfr) == 2:
-            gs['ep'] = (cfr + (tr - cfr) // 2, cfc)
-        gs['moved_this_turn'].add((tr, tc))
-        gs['normal_done'] = True
-    return True
+        if pt(p) == 'P' and abs(tr - cfr) == 2: gs['ep'] = ((cfr + tr) // 2, cfc)
+        if pt(p) == 'K':
+            gs['cr'][c + 'K'] = False
+            gs['cr'][c + 'Q'] = False
+        if pt(p) == 'R':
+            if cfr == (7 if c == 'w' else 0) and cfc == 0: gs['cr'][c + 'Q'] = False
+            if cfr == (7 if c == 'w' else 0) and cfc == 7: gs['cr'][c + 'K'] = False
+        gs['normal_done'] = False
+        return True
 
     elif hidden_move:
         if (fr, fc) in gs.get('moved_this_turn', set()):
