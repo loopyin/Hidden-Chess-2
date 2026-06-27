@@ -70,7 +70,6 @@ async def broadcast_state(room_code):
                     safe_state['game_over_msg'] = state['game_over_msg']
                     safe_state['rematch_requested_by'] = state.get('rematch_requested_by')
                     safe_state['rematch_declined'] = state.get('rematch_declined')
-                    safe_state['opponent_joined'] = state.get('opponent_joined', False)
                     safe_state['opponent_left'] = state.get('opponent_left', False)
                     safe_state['game_started'] = state['game_started']
 

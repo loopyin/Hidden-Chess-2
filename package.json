@@ -1,20 +1,12 @@
 {
-  "name": "hidden-chess-v1.5.3",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "name": "shadow-chess",
+  "version": "1.5.2.1",
+  "description": "Hidden Chess WebSocket server",
+  "main": "server.py",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "echo 'Building Hidden Chess...'",
+    "start": "python3 server.py",
+    "lint": "python3 -m compileall ."
   },
-  "dependencies": {
-
-  },
-  "devDependencies": {
-    "@types/node": "^22.14.0",
-    
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
-  }
+  "dependencies": {}
 }
