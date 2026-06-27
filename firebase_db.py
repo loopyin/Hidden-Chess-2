@@ -46,6 +46,15 @@ class FirebaseClient:
                                 state_str = fields["state"].get("stringValue")
                                 if state_str:
                                     try:
+                                        tokens_fields = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
+                                        if "b" in tokens_fields:
+                                            state_dict = json.loads(state_str)
+                                            if not state_dict.get("opponent_joined"):
+                                                state_dict["opponent_joined"] = True
+                                                state_str = json.dumps(state_dict)
+                                    except Exception:
+                                        pass
+                                    try:
                                         if self.on_state_update:
                                             self.on_state_update(state_str)
                                     except Exception as e:
@@ -144,6 +153,26 @@ class FirebaseClient:
                 if tokens.get("w", {}).get("stringValue") == token:
                     return True, {"color": "w", "reconnected": True}
                 if tokens.get("b", {}).get("stringValue") == token:
+                    state_str = fields.get("state", {}).get("stringValue", "{}")
+                    try:
+                        state_dict = json.loads(state_str)
+                        if not state_dict.get("opponent_joined"):
+                            state_dict["opponent_joined"] = True
+                            fields["state"] = {"stringValue": json.dumps(state_dict)}
+                            
+                            doc = {
+                                "fields": {
+                                    "state": fields.get("state"),
+                                    "tokens": {"mapValue": {"fields": tokens}}
+                                }
+                            }
+                            data_encoded = json.dumps(doc).encode('utf-8')
+                            patch_url = f"{BASE_URL}/{room_code}?updateMask.fieldPaths=state&updateMask.fieldPaths=tokens&key={API_KEY}"
+                            patch_req = urllib.request.Request(patch_url, data=data_encoded, headers={'Content-Type': 'application/json'}, method='PATCH')
+                            with urllib.request.urlopen(patch_req, timeout=10) as patch_resp:
+                                pass
+                    except Exception as e:
+                        print("join_room reconnect patch error:", e)
                     return True, {"color": "b", "reconnected": True}
                 return False, "Sala cheia"
                 
