@@ -1,5 +1,4 @@
 import time
-from debugger import debugger
 from gesture import default_gesture_state, normalize_gesture_state
 
 GLYPHS = {
@@ -647,12 +646,12 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
     if (tr, tc) in frozen:
         frozen.remove((tr, tc))
         gs['pts'][c] -= val
-        gs['log'].append(f"ICE|{c}| O rei descongelou {alg(tc, tr)}")
+        gs['log'].append(f"ICE|{c}| O rei descongelou {alg(tc, tr)} (-{val}pt)")
         return 'unfrozen'
     else:
         frozen.add((tr, tc))
         gs['pts'][c] += val
-        gs['log'].append(f"ICE|{c}| O rei congelou {alg(tc, tr)}")
+        gs['log'].append(f"ICE|{c}| O rei congelou {alg(tc, tr)} (+{val}pt)")
         return 'frozen'
 
 

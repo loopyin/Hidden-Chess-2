@@ -1,0 +1,64 @@
+15:from gesture import build_gesture_state, default_gesture_state, normalize_gesture_state, gesture_phase
+223:async def sync_gesture_begin(websocket, client_state, *, timer=0.0, source_sq=None, source_piece=None):
+224:    gesture_state = build_gesture_state(
+232:    client_state['gesture_state'] = gesture_state
+237:                'action': 'gesture_begin',
+238:                'gesture_state': gesture_state,
+242:    return gesture_state
+245:async def sync_gesture_cancel(websocket, client_state):
+246:    client_state['gesture_state'] = default_gesture_state()
+249:            await websocket.send(json.dumps({'type': 'action', 'action': 'gesture_cancel'}))
+308:    elif rtype == 'gesture_invalid':
+706:                if client_state.get('is_dragging_gesture'):
+752:            if client_state.get('is_dragging_gesture') and client_state.get('drag_piece_sq') == (r, c):
+986:    if client_state.get('is_dragging_gesture') and 'drag_pos' in client_state:
+1020:                hold_p = min(1.0, client_state.get('gesture_timer', 0.0) / 6.0)
+1658:async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, screen, fonts):
+1659:    if not client_state.get('is_dragging_gesture'):
+1674:            client_state['is_dragging_gesture'] = False
+1677:            await sync_gesture_cancel(websocket, client_state)
+1702:                    client_state['is_dragging_gesture'] = False
+1707:                    await sync_gesture_cancel(websocket, client_state)
+1831:                    client_state['gesture_state'] = default_gesture_state()
+1836:                        "gesture_hidden": is_hidden_move,
+1837:                        "gesture_fakeout": is_fakeout_move,
+1838:                        "gesture_state": client_state.get('gesture_state', default_gesture_state())
+1843:                    client_state['gesture_state'] = default_gesture_state()
+1845:            client_state['is_dragging_gesture'] = False
+1848:            client_state['gesture_state'] = default_gesture_state()
+1851:            trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+1852:            client_state['is_dragging_gesture'] = False
+1855:            client_state['gesture_state'] = default_gesture_state()
+1856:            await sync_gesture_cancel(websocket, client_state)
+1862:        client_state['is_dragging_gesture'] = False
+1865:        client_state['gesture_state'] = default_gesture_state()
+1866:        await sync_gesture_cancel(websocket, client_state)
+1980:        'gesture_state': default_gesture_state()
+2005:            'gesture_state': default_gesture_state(),
+2030:        if client_state.get('is_dragging_gesture'):
+2031:            client_state['gesture_timer'] = client_state.get('gesture_timer', 0.0) + dt
+2032:            if not client_state.get('hidden_triggered') and client_state['gesture_timer'] >= 2.0:
+2037:                    await sync_gesture_begin(websocket, client_state, timer=client_state['gesture_timer'], source_sq=client_state.get('drag_piece_sq'), source_piece=client_state.get('drag_piece_name'))
+2056:                        client_state['gesture_timer'] = 2.0
+2058:            if client_state['gesture_timer'] >= 6.0 and not client_state.get('fakeout_triggered'):
+2063:                    await sync_gesture_begin(websocket, client_state, timer=client_state['gesture_timer'], source_sq=client_state.get('drag_piece_sq'), source_piece=client_state.get('drag_piece_name'))
+2081:                    client_state['gesture_timer'] = 6.0
+2164:        if client_state.get('is_dragging_gesture'):
+2241:                    if not client_state.get('is_dragging_gesture'):
+2242:                        client_state['gesture_state'] = new_gs.get('gesture_state', default_gesture_state())
+3012:                    if client_state.get('is_dragging_gesture') and not client_state.get('waiting'):
+3014:                        gs = await handle_gesture_release(mx, my, client_state, gs, is_local, websocket, screen, fonts)
+3016:                    if client_state.get('is_dragging_gesture'):
+3401:                                    client_state['is_dragging_gesture'] = True
+3405:                                    client_state['gesture_timer'] = 0.0
+3621:                                                "gesture_hidden": is_hidden_cmd,
+3622:                                                "gesture_fakeout": is_fakeout_cmd,
+3623:                                                "gesture_state": client_state.get('gesture_state', default_gesture_state())
+3628:                                            client_state['is_dragging_gesture'] = False
+3921:            gesture_lbl = fonts['big'].render("Gesture", True, (200, 200, 200))
+3922:            screen.blit(gesture_lbl, (box_x + 20, box_y_2 + (box_h - gesture_lbl.get_height()) // 2))
+3925:            gesture_enabled = client_state.get('disable_undo_placeholder', False) # True means ON
+3926:            btn_color_2 = (40, 160, 80) if gesture_enabled else (70, 70, 75)
+3927:            h_color_2 = (50, 180, 95) if gesture_enabled else (90, 90, 95)
+3931:            if t_ms - err_pulse < 300 and not gesture_enabled:
+3935:            draw_fancy_btn(screen, "ON" if gesture_enabled else "OFF", fonts['small'], btn_color_2, h_color_2, (255, 255, 255), btn_rect_2, is_hover=btn_rect_2.collidepoint(mouse) and client_state.get('my_color') != 'b', custom_radius=6)

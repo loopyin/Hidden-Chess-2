@@ -1,0 +1,51 @@
+1634-        'show_hidden': False,
+1635-        'resign_confirm': False,
+1636-        'panel_btns': {},
+1637-        'is_local': False,
+1638-        'turn_start_snapshot': None,
+1639-        'turn_history': [],
+1640-        'history_index': 0
+1641-    }
+1642-    input_text = ""
+1643-    websocket = None
+1644-    clock = pygame.time.Clock()
+1645-
+1646-    menu_y_start = (WIN_H // 2) - 100
+1647-    btn_create = pygame.Rect(WIN_W // 2 - 100, menu_y_start, 200, 50)
+1648-    btn_join = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 70, 200, 50)
+1649-    btn_local = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 140, 200, 50)
+1650-    btn_test = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 210, 200, 50)
+1651-    btn_replays = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 280, 200, 50)
+1652-
+1653-    def start_local_game(is_test=False):
+1654-        nonlocal gs, client_state, app_state
+1655-        gs = make_state()
+1656-        gs['game_started'] = False
+1657-        client_state = {
+1658-            'my_color': 'w',
+1659-            'waiting': False,
+1660-            'flipped': False,
+1661-            'selected': None,
+1662-            'legal_sq': [],
+1663-            'room_code': "TEST" if is_test else "LOCAL",
+1664-            'is_typing': False,
+1665-            'msg_queue': deque(),
+1666-            'show_hidden': True,
+1667-            'resign_confirm': False,
+1668-            'panel_btns': {},
+1669-            'is_local': True,
+1670-            'is_test': is_test,
+1671-            'turn_start_snapshot': copy.deepcopy(gs),
+1672-            'turn_history': [copy.deepcopy(gs)],
+1673-            'history_index': 0,
+1674-            'fakeout_mode_enabled': False,
+1675-            'disable_undo_placeholder': False,
+1676-            'absolute_history': [copy.deepcopy(gs)]
+1677-        }
+1678-        app_state = "LOBBY"
+1679-        if is_test:
+1680-            pygame.display.set_caption("Xadrez de Sombras - Partida Teste")
+1681-        else:
+1682-            pygame.display.set_caption("Xadrez de Sombras - Configurar Partida Local")
+1683-
+1684:    while running:

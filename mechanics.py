@@ -121,7 +121,13 @@ class MechanicsManager:
         if save_undo_fn:
             save_undo_fn(client_state, gs)
         
-        if client_state.get('drafting'):
+        print(f"DEBUG: toggle_hidden | drafting: {client_state.get('drafting')} | is_local: {is_local}")
+        if client_state.get('drafting') or not is_local:
+            if not client_state.get('drafting'):
+                client_state['drafting'] = True
+                if 'draft_moves' not in client_state or client_state['draft_moves'] is None:
+                    client_state['draft_moves'] = []
+            
             client_state['draft_hidden'] = not client_state.get('draft_hidden', False)
             if client_state['draft_hidden']:
                 client_state['draft_fakeout'] = False
@@ -158,8 +164,7 @@ class MechanicsManager:
             return
 
         if not skip_ws and not is_local and websocket:
-            from client import send_ws_msg
-            send_ws_msg(client_state, websocket, {"type": "action", "action": "toggle_hidden"})
+            await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
 
     @staticmethod
     def _execute_toggle_fakeout_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
@@ -178,7 +183,12 @@ class MechanicsManager:
         if save_undo_fn:
             save_undo_fn(client_state, gs)
         
-        if client_state.get('drafting'):
+        if client_state.get('drafting') or not is_local:
+            if not client_state.get('drafting'):
+                client_state['drafting'] = True
+                if 'draft_moves' not in client_state or client_state['draft_moves'] is None:
+                    client_state['draft_moves'] = []
+            
             client_state['draft_fakeout'] = not client_state.get('draft_fakeout', False)
             if client_state['draft_fakeout']:
                 client_state['draft_hidden'] = False
@@ -215,5 +225,4 @@ class MechanicsManager:
             return
 
         if not skip_ws and not is_local and websocket:
-            from client import send_ws_msg
-            send_ws_msg(client_state, websocket, {"type": "action", "action": "toggle_fakeout"})
+            await websocket.send(json.dumps({"type": "action", "action": "toggle_fakeout"}))
