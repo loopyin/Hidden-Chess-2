@@ -26,49 +26,55 @@ class FirebaseClient:
         self.on_error = None
         self.last_update_time = None
         
-    def _poll(self):
+    async def _poll_async(self):
         while self.polling:
             if not self.room_code:
-                time.sleep(1)
+                await asyncio.sleep(1.0)
                 continue
                 
             url = f"{BASE_URL}/{self.room_code}?key={API_KEY}&_t={int(time.time() * 1000)}"
-            try:
+            
+            def _do_poll():
                 req = urllib.request.Request(url, headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'})
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     if resp.status == 200:
-                        data = json.loads(resp.read().decode('utf-8'))
-                        update_time = data.get("updateTime")
-                        if update_time != self.last_update_time:
-                            self.last_update_time = update_time
-                            fields = data.get("fields", {})
-                            if "state" in fields:
-                                state_str = fields["state"].get("stringValue")
-                                if state_str:
-                                    try:
-                                        tokens_fields = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
-                                        if "b" in tokens_fields:
-                                            state_dict = json.loads(state_str)
-                                            state_dict["opponent_joined"] = True
-                                            state_str = json.dumps(state_dict)
-                                    except Exception as e:
-                                        print("opponent_joined inject error:", e)
-                                    try:
-                                        if self.on_state_update:
-                                            self.on_state_update(state_str)
-                                    except Exception as e:
-                                        print("Error in callback:", e)
+                        return resp.read().decode('utf-8')
+                return None
+                
+            try:
+                result = await asyncio.to_thread(_do_poll)
+                if result:
+                    data = json.loads(result)
+                    update_time = data.get("updateTime")
+                    if update_time != self.last_update_time:
+                        self.last_update_time = update_time
+                        fields = data.get("fields", {})
+                        if "state" in fields:
+                            state_str = fields["state"].get("stringValue")
+                            if state_str:
+                                try:
+                                    tokens_fields = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
+                                    if "b" in tokens_fields:
+                                        state_dict = json.loads(state_str)
+                                        state_dict["opponent_joined"] = True
+                                        state_str = json.dumps(state_dict)
+                                except Exception as e:
+                                    print("opponent_joined inject error:", e)
+                                try:
+                                    if self.on_state_update:
+                                        self.on_state_update(state_str)
+                                except Exception as e:
+                                    print("Error in callback:", e)
             except Exception as e:
                 pass
                 
-            time.sleep(1.0)
+            await asyncio.sleep(1.0)
             
     def start_polling(self, on_state_update, on_error=None):
         self.on_state_update = on_state_update
         self.on_error = on_error
         self.polling = True
-        self.thread = threading.Thread(target=self._poll, daemon=True)
-        self.thread.start()
+        asyncio.create_task(self._poll_async())
         
     def stop_polling(self):
         self.polling = False

@@ -326,12 +326,11 @@ class MockWebsocket:
                 new_gs = deserialize_state(state_dict)
                 self.gs = new_gs
                 # Push to asyncio queue for the client to process
-                asyncio.run_coroutine_threadsafe(
+                asyncio.create_task(
                     self.queue.put(json.dumps({
                         "type": "state_update",
                         "state": state_dict
-                    })),
-                    self.loop
+                    }))
                 )
             except Exception as e:
                 print("Error in on_update", e)
