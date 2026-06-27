@@ -1,0 +1,117 @@
+name: Build Platforms
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [published, created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+        
+      - name: Install System Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5 libncursesw5 libtinfo5 cmake libffi-dev libssl-dev
+          python -m pip install --upgrade pip setuptools wheel
+          pip install buildozer "cython<3.0.0" virtualenv
+          
+      - name: Build with Buildozer
+        run: |
+          echo "pip<24.1" > /tmp/pip-constraint.txt
+          export PIP_CONSTRAINT=/tmp/pip-constraint.txt
+          buildozer android debug
+          
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: bin/*.apk
+
+      - name: Upload APK to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-desktop:
+    name: Build ${{ matrix.os-name }} Executable
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os-name: Windows
+            artifact-name: windows-exe
+          - os: ubuntu-latest
+            os-name: Linux
+            artifact-name: linux-bin
+          - os: macos-latest
+            os-name: MacOS
+            artifact-name: macos-bin
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller main.spec
+          
+      - name: Rename Executable (Linux/MacOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mv dist/HiddenChess dist/HiddenChess-${{ matrix.os-name }}
+          
+      - name: Rename Executable (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mv dist/HiddenChess.exe dist/HiddenChess-Windows.exe
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: dist/HiddenChess*
+
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/HiddenChess*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
