@@ -1,8 +1,6 @@
 import math, random, time
 import pygame, sys, json, os, copy
 import asyncio
-import websockets
-import ssl
 import traceback
 from collections import deque
 from chess_logic import GLYPHS, pt, pc, get_absolute_board, get_true_board, in_check, hidden_cost, check_conflict, \
@@ -1850,39 +1848,20 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
 
 
 async def wake_up_server(uri):
-    try:
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-        kwargs = {}
-        if uri.startswith('wss'): kwargs['ssl'] = ssl_ctx
-        ws = await asyncio.wait_for(websockets.connect(uri, **kwargs), timeout=15)
-        await ws.close()
-    except Exception:
-        pass
+    pass
 
 async def connect_and_join(uri, action, room_code=None, token=None):
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
-    kwargs = {'ping_interval': 259200, 'ping_timeout': 259200, 'max_size': 65536}
-    if uri.startswith('wss'): kwargs['ssl'] = ssl_ctx
-    
-    last_err = None
-    for attempt in range(3): # 3 retries
-        try:
-            ws = await asyncio.wait_for(websockets.connect(uri, **kwargs), timeout=20)
-            if action == "create_room":
-                await ws.send(json.dumps({"type": "create_room"}))
-            elif action == "join_room":
-                await ws.send(json.dumps({"type": "join_room", "room": room_code, "session_token": token}))
-            return ws
-        except Exception as e:
-            last_err = e
-            # Immediate retry might just hang again, small delay helps if connection refused
-            await asyncio.sleep(0.5)
-            
-    return last_err
+    from firebase_transport import MockWebsocket
+    try:
+        ws = MockWebsocket()
+        if action == "create_room":
+            await ws.send(json.dumps({"type": "create_room"}))
+        elif action == "join_room":
+            await ws.send(json.dumps({"type": "join_room", "room": room_code, "session_token": token}))
+        return ws
+    except Exception as e:
+        print("Connection error:", e)
+        return None
 
 async def game_loop():
     global WIN_W, WIN_H, PORTRAIT
@@ -1924,7 +1903,7 @@ async def game_loop():
     load_assets()
     title_font = fonts['title']
 
-    uri = "wss://hidden-chess-lnbg.onrender.com"
+    uri = ""
     
     # Try to wake up server immediately in background
     asyncio.create_task(wake_up_server(uri))
@@ -1967,7 +1946,11 @@ async def game_loop():
     def start_local_game(is_test=False):
         nonlocal gs, client_state, app_state
         gs = make_state()
-        gs['game_started'] = False
+        gs['game_started'] = True
+        gs['fakeout_mode_enabled'] = True
+        gs['disable_undo_placeholder'] = True
+        gs['score_to_win'] = True
+        gs['ice_king_enabled'] = True
         client_state = {
             'my_color': 'w',
             'waiting': False,
@@ -1985,16 +1968,18 @@ async def game_loop():
             'turn_start_snapshot': copy.deepcopy(gs),
             'turn_history': [copy.deepcopy(gs)],
             'history_index': 0,
-            'fakeout_mode_enabled': False,
-            'disable_undo_placeholder': False,
-            'score_to_win': False,
+            'fakeout_mode_enabled': True,
+            'disable_undo_placeholder': True,
+            'score_to_win': True,
+            'ice_king_enabled': True,
             'absolute_history': [copy.deepcopy(gs)]
         }
-        app_state = "LOBBY"
+        app_state = "PLAYING"
+        play_sound('start')
         if is_test:
             pygame.display.set_caption("Hidden Chess - Partida Teste")
         else:
-            pygame.display.set_caption("Hidden Chess - Configurar Partida Local")
+            pygame.display.set_caption("Hidden Chess - Partida Local")
 
     while running:
         dt = clock.tick(FPS) / 1000.0
@@ -2224,9 +2209,6 @@ async def game_loop():
                                     is_capture_by_log = True
                                     break
                         
-                        # Update gs after comparison
-                        gs = new_gs
-                    
                         cap_w = len(new_gs.get('captured_w', [])) > len(gs.get('captured_w', []))
                         cap_b = len(new_gs.get('captured_b', [])) > len(gs.get('captured_b', []))
                         is_capture = cap_w or cap_b or has_captured_piece_on_square or is_capture_by_log
@@ -2340,10 +2322,10 @@ async def game_loop():
                             f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
                     else:
                         app_state = "LOBBY"
-                        client_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', False)
-                        client_state['disable_undo_placeholder'] = gs.get('disable_undo_placeholder', False)
-                        client_state['score_to_win'] = gs.get('score_to_win', False)
-                        client_state['ice_king_enabled'] = gs.get('ice_king_enabled', False)
+                        client_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', True)
+                        client_state['disable_undo_placeholder'] = gs.get('disable_undo_placeholder', True)
+                        client_state['score_to_win'] = gs.get('score_to_win', True)
+                        client_state['ice_king_enabled'] = gs.get('ice_king_enabled', True)
 
                 elif data['type'] == 'error':
                     error_msg = data['message']
@@ -2358,10 +2340,6 @@ async def game_loop():
 
             except asyncio.TimeoutError:
                 pass
-            except websockets.exceptions.ConnectionClosed:
-                error_msg = "Conexão perdida. Retornando ao menu..."
-                app_state = "MENU"
-                websocket = None
             except Exception as e:
                 print("Websocket error:", e)
 
@@ -2627,26 +2605,10 @@ async def game_loop():
 
                 elif ev.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = ev.pos
-                    if client_state.get('is_local', False):
-                        box_y_start = WIN_H // 2 - 160
-                    else:
-                        box_y_start = WIN_H // 2 - 110
-
-                    box_w, box_h = 440, 54
-                    row_gap = 64
-                    box_x = (WIN_W - box_w) // 2
-                    
-                    btn_w, btn_h = 100, 36
-                    btn_x = box_x + box_w - btn_w - 20
-                    btn_fakeout = pygame.Rect(btn_x, box_y_start + (box_h - btn_h) // 2, btn_w, btn_h)
-                    btn_undo = pygame.Rect(btn_x, box_y_start + row_gap + (box_h - btn_h) // 2, btn_w, btn_h)
-                    btn_score = pygame.Rect(btn_x, box_y_start + row_gap * 2 + (box_h - btn_h) // 2, btn_w, btn_h)
-                    btn_ice = pygame.Rect(btn_x, box_y_start + row_gap * 3 + (box_h - btn_h) // 2, btn_w, btn_h)
-
-                    play_btn_y = box_y_start + row_gap * 3 + box_h + 30
+                    play_btn_y = WIN_H // 2 - 20
                     play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
                     
-                    back_btn_y = play_btn_y + 70
+                    back_btn_y = play_btn_y + 80
                     back_btn_rect = pygame.Rect((WIN_W - 160) // 2, back_btn_y, 160, 44)
 
                     if back_btn_rect.collidepoint((mx, my)):
@@ -2659,92 +2621,13 @@ async def game_loop():
                         client_state['room_code'] = None
 
                     if client_state.get('my_color') != 'b':
-                        if btn_fakeout.collidepoint((mx, my)):
-                            new_val = not client_state.get('fakeout_mode_enabled', False)
-                            client_state['fakeout_mode_enabled'] = new_val
-                            play_sound('toggle')
-                            if client_state.get('is_local', False):
-                                gs['fakeout_mode_enabled'] = new_val
-                            else:
-                                if websocket:
-                                    await websocket.send(json.dumps({
-                                        "type": "action",
-                                        "action": "set_fakeout_mode",
-                                        "fakeout_mode_enabled": new_val
-                                    }))
-
-                        elif btn_undo.collidepoint((mx, my)):
-                            # Disable Undo flag toggles.
-                            new_val = not client_state.get('disable_undo_placeholder', False)
-                            client_state['disable_undo_placeholder'] = new_val
-                            if not new_val:
-                                client_state['ice_king_enabled'] = False
-                                if client_state.get('is_local', False):
-                                    gs['ice_king_enabled'] = False
-                                else:
-                                    if websocket:
-                                        asyncio.create_task(websocket.send(json.dumps({
-                                            "type": "action", "action": "set_ice_king", "ice_king_enabled": False
-                                        })))
-                            play_sound('toggle')
-                            if client_state.get('is_local', False):
-                                gs['disable_undo_placeholder'] = new_val
-                            else:
-                                if websocket:
-                                    await websocket.send(json.dumps({
-                                        "type": "action",
-                                        "action": "set_disable_undo",
-                                        "disable_undo_placeholder": new_val
-                                    }))
-
-                        elif btn_score.collidepoint((mx, my)):
-                            new_val = not client_state.get('score_to_win', False)
-                            client_state['score_to_win'] = new_val
-                            if not new_val:
-                                client_state['ice_king_enabled'] = False
-                                if client_state.get('is_local', False):
-                                    gs['ice_king_enabled'] = False
-                                else:
-                                    if websocket:
-                                        asyncio.create_task(websocket.send(json.dumps({
-                                            "type": "action", "action": "set_ice_king", "ice_king_enabled": False
-                                        })))
-                            play_sound('toggle')
-                            if client_state.get('is_local', False):
-                                gs['score_to_win'] = new_val
-                            else:
-                                if websocket:
-                                    await websocket.send(json.dumps({
-                                        "type": "action",
-                                        "action": "set_score_to_win",
-                                        "score_to_win": new_val
-                                    }))
-
-                        elif btn_ice.collidepoint((mx, my)):
-                            if not client_state.get('disable_undo_placeholder', False) or not client_state.get('score_to_win', False):
-                                play_sound('error')
-                                client_state['ice_king_error_pulse'] = pygame.time.get_ticks()
-                            else:
-                                new_val = not client_state.get('ice_king_enabled', False)
-                                client_state['ice_king_enabled'] = new_val
-                                play_sound('toggle')
-                                if client_state.get('is_local', False):
-                                    gs['ice_king_enabled'] = new_val
-                                else:
-                                    if websocket:
-                                        await websocket.send(json.dumps({
-                                            "type": "action",
-                                            "action": "set_ice_king",
-                                            "ice_king_enabled": new_val
-                                        }))
-
-                        elif play_btn_rect.collidepoint((mx, my)):
+                        if play_btn_rect.collidepoint((mx, my)):
                             if client_state.get('is_local', False):
                                 gs['game_started'] = True
-                                gs['fakeout_mode_enabled'] = client_state.get('fakeout_mode_enabled', False)
-                                gs['disable_undo_placeholder'] = client_state.get('disable_undo_placeholder', False)
-                                gs['score_to_win'] = client_state.get('score_to_win', False)
-                                gs['ice_king_enabled'] = client_state.get('ice_king_enabled', False)
+                                gs['fakeout_mode_enabled'] = True
+                                gs['disable_undo_placeholder'] = True
+                                gs['score_to_win'] = True
+                                gs['ice_king_enabled'] = True
                                 client_state['turn_start_snapshot'] = copy.deepcopy(gs)
                                 client_state['turn_history'] = [copy.deepcopy(gs)]
                                 client_state['history_index'] = 0
@@ -3793,12 +3676,10 @@ async def game_loop():
                     draw_fancy_btn(screen, char, fonts['small'], (50, 50, 55), (70, 70, 75), (255, 255, 255), kval, is_hover=kval.collidepoint(mouse), custom_radius=4)
 
         elif app_state == "LOBBY":
-            draw_text_center(screen, "Configurações", title_font, T_MAIN, WIN_H // 2 - 240)
+            draw_text_center(screen, "Aguardando", title_font, T_MAIN, WIN_H // 2 - 240)
             
             if client_state.get('is_local', False):
-                room_type = "Teste" if client_state.get('is_test', False) else "Local"
-                draw_text_center(screen, room_type, fonts['small'], T_DIM, WIN_H // 2 - 200)
-                box_y_start = WIN_H // 2 - 160
+                pass
             else:
                 room_type = "Online"
                 draw_text_center(screen, room_type, fonts['small'], T_DIM, WIN_H // 2 - 200)
@@ -3807,94 +3688,8 @@ async def game_loop():
                     draw_text_center(screen, "OPONENTE CONECTADO!", fonts['small'], (100, 220, 100), WIN_H // 2 - 150)
                 else:
                     draw_text_center(screen, "AGUARDANDO OPONENTE...", fonts['small'], T_DIM, WIN_H // 2 - 150)
-                box_y_start = WIN_H // 2 - 110
 
-            box_w, box_h = 440, 54
-            row_gap = 64
-            box_x = (WIN_W - box_w) // 2
-            
-            btn_w, btn_h = 100, 36
-            btn_x = box_x + box_w - btn_w - 20
-
-            # Row 1: Fakeout
-            box_y_1 = box_y_start
-            rect_row_1 = pygame.Rect(box_x, box_y_1, box_w, box_h)
-            draw_rect_aa(screen, (30, 28, 28), rect_row_1, 8)
-            draw_rect_aa(screen, (100, 100, 105), rect_row_1, 8, 2)
-            
-            fake_lbl = fonts['big'].render("Fakeout", True, (200, 200, 200))
-            screen.blit(fake_lbl, (box_x + 20, box_y_1 + (box_h - fake_lbl.get_height()) // 2))
-
-            btn_rect_1 = pygame.Rect(btn_x, box_y_1 + (box_h - btn_h) // 2, btn_w, btn_h)
-            fake_enabled = client_state.get('fakeout_mode_enabled', False)
-            btn_color_1 = (40, 160, 80) if fake_enabled else (70, 70, 75)
-            h_color_1 = (50, 180, 95) if fake_enabled else (90, 90, 95)
-            draw_fancy_btn(screen, "ON" if fake_enabled else "OFF", fonts['small'], btn_color_1, h_color_1, (255, 255, 255), btn_rect_1, is_hover=btn_rect_1.collidepoint(mouse) and client_state.get('my_color') != 'b', custom_radius=6)
-            
-            # Row 2: Gesture
-            box_y_2 = box_y_start + row_gap
-            rect_row_2 = pygame.Rect(box_x, box_y_2, box_w, box_h)
-            draw_rect_aa(screen, (30, 28, 28), rect_row_2, 8)
-            draw_rect_aa(screen, (100, 100, 105), rect_row_2, 8, 2)
-            
-            gesture_lbl = fonts['big'].render("Gesture", True, (200, 200, 200))
-            screen.blit(gesture_lbl, (box_x + 20, box_y_2 + (box_h - gesture_lbl.get_height()) // 2))
-            
-            btn_rect_2 = pygame.Rect(btn_x, box_y_2 + (box_h - btn_h) // 2, btn_w, btn_h)
-            gesture_enabled = client_state.get('disable_undo_placeholder', False) # True means ON
-            btn_color_2 = (40, 160, 80) if gesture_enabled else (70, 70, 75)
-            h_color_2 = (50, 180, 95) if gesture_enabled else (90, 90, 95)
-
-            t_ms = pygame.time.get_ticks()
-            err_pulse = client_state.get('ice_king_error_pulse', 0)
-            if t_ms - err_pulse < 300 and not gesture_enabled:
-                btn_color_2 = (60, 110, 220)
-                h_color_2 = (80, 150, 255)
-
-            draw_fancy_btn(screen, "ON" if gesture_enabled else "OFF", fonts['small'], btn_color_2, h_color_2, (255, 255, 255), btn_rect_2, is_hover=btn_rect_2.collidepoint(mouse) and client_state.get('my_color') != 'b', custom_radius=6)
-            
-            # Row 3: Score to Win
-            box_y_3 = box_y_start + row_gap * 2
-            rect_row_3 = pygame.Rect(box_x, box_y_3, box_w, box_h)
-            draw_rect_aa(screen, (30, 28, 28), rect_row_3, 8)
-            draw_rect_aa(screen, (100, 100, 105), rect_row_3, 8, 2)
-            
-            score_lbl = fonts['big'].render("Score to Win", True, (200, 200, 200))
-            screen.blit(score_lbl, (box_x + 20, box_y_3 + (box_h - score_lbl.get_height()) // 2))
-            
-            btn_rect_3 = pygame.Rect(btn_x, box_y_3 + (box_h - btn_h) // 2, btn_w, btn_h)
-            score_enabled = client_state.get('score_to_win', False)
-            btn_color_3 = (40, 160, 80) if score_enabled else (70, 70, 75)
-            h_color_3 = (50, 180, 95) if score_enabled else (90, 90, 95)
-
-            if t_ms - err_pulse < 300 and not score_enabled:
-                btn_color_3 = (60, 110, 220)
-                h_color_3 = (80, 150, 255)
-
-            draw_fancy_btn(screen, "ON" if score_enabled else "OFF", fonts['small'], btn_color_3, h_color_3, (255, 255, 255), btn_rect_3, is_hover=btn_rect_3.collidepoint(mouse) and client_state.get('my_color') != 'b', custom_radius=6)
-
-            # Row 4: Ice King
-            box_y_4 = box_y_start + row_gap * 3
-            rect_row_4 = pygame.Rect(box_x, box_y_4, box_w, box_h)
-            draw_rect_aa(screen, (30, 28, 28), rect_row_4, 8)
-            draw_rect_aa(screen, (100, 100, 105), rect_row_4, 8, 2)
-            
-            ik_lbl = fonts['big'].render("Ice King", True, (200, 200, 200))
-            screen.blit(ik_lbl, (box_x + 20, box_y_4 + (box_h - ik_lbl.get_height()) // 2))
-            
-            btn_rect_4 = pygame.Rect(btn_x, box_y_4 + (box_h - btn_h) // 2, btn_w, btn_h)
-            ik_enabled = client_state.get('ice_king_enabled', False)
-            btn_color_4 = (40, 160, 80) if ik_enabled else (70, 70, 75)
-            h_color_4 = (50, 180, 95) if ik_enabled else (90, 90, 95)
-
-            if t_ms - err_pulse < 300:
-                btn_color_4 = (230, 40, 40)
-                h_color_4 = (250, 60, 60)
-
-            draw_fancy_btn(screen, "ON" if ik_enabled else "OFF", fonts['small'], btn_color_4, h_color_4, (255, 255, 255), btn_rect_4, is_hover=btn_rect_4.collidepoint(mouse) and client_state.get('my_color') != 'b', custom_radius=6)
-            
-            # --- 5. Play Button ---
-            play_btn_y = box_y_start + row_gap * 3 + box_h + 30
+            play_btn_y = WIN_H // 2 - 20
             play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
 
             if client_state.get('my_color') == 'b':
@@ -3908,7 +3703,7 @@ async def game_loop():
                     draw_fancy_btn(screen, "Play", title_font, (45, 45, 48), (45, 45, 48), (120, 120, 125), play_btn_rect, is_disabled=True, custom_radius=8)
 
             # Voltar botão
-            back_btn_y = play_btn_y + 70
+            back_btn_y = play_btn_y + 80
             back_btn_rect = pygame.Rect((WIN_W - 160) // 2, back_btn_y, 160, 44)
             draw_fancy_btn(screen, "Voltar", fonts['small'], (70, 70, 75), (90, 90, 95), (255, 255, 255), back_btn_rect, is_hover=back_btn_rect.collidepoint(mouse), custom_radius=6)
 

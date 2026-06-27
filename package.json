@@ -8,5 +8,7 @@
     "start": "python3 server.py",
     "lint": "python3 -m compileall ."
   },
-  "dependencies": {}
+  "dependencies": {
+    "requests": "^0.3.0"
+  }
 }
