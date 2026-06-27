@@ -2229,11 +2229,13 @@ async def game_loop():
                     gs['disable_undo_placeholder'] = lobby_state.get('disable_undo_placeholder', False)
                     gs['score_to_win'] = lobby_state.get('score_to_win', False)
                     gs['ice_king_enabled'] = lobby_state.get('ice_king_enabled', False)
+                    gs['debug_mode_enabled'] = lobby_state.get('debug_mode_enabled', False)
                     
                     client_state['fakeout_mode_enabled'] = gs['fakeout_mode_enabled']
                     client_state['disable_undo_placeholder'] = gs['disable_undo_placeholder']
                     client_state['score_to_win'] = gs['score_to_win']
                     client_state['ice_king_enabled'] = gs['ice_king_enabled']
+                    client_state['debug_mode_enabled'] = gs['debug_mode_enabled']
 
                 elif data['type'] == 'state_update':
                     client_state['waiting'] = False
@@ -2684,8 +2686,9 @@ async def game_loop():
                     btn_undo = pygame.Rect(btn_x, box_y_start + row_gap + (box_h - btn_h) // 2, btn_w, btn_h)
                     btn_score = pygame.Rect(btn_x, box_y_start + row_gap * 2 + (box_h - btn_h) // 2, btn_w, btn_h)
                     btn_ice = pygame.Rect(btn_x, box_y_start + row_gap * 3 + (box_h - btn_h) // 2, btn_w, btn_h)
+                    btn_debug = pygame.Rect(btn_x, box_y_start + row_gap * 4 + (box_h - btn_h) // 2, btn_w, btn_h)
 
-                    play_btn_y = box_y_start + row_gap * 3 + box_h + 30
+                    play_btn_y = box_y_start + row_gap * 4 + box_h + 30
                     play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
                     
                     back_btn_y = play_btn_y + 70
@@ -2779,6 +2782,18 @@ async def game_loop():
                                             "action": "set_ice_king",
                                             "ice_king_enabled": new_val
                                         }))
+                        
+                        elif not client_state.get('is_local', False) and btn_debug.collidepoint((mx, my)):
+                            new_val = not client_state.get('debug_mode_enabled', False)
+                            client_state['debug_mode_enabled'] = new_val
+                            gs['debug_mode_enabled'] = new_val
+                            play_sound('toggle')
+                            if websocket:
+                                await websocket.send(json.dumps({
+                                    "type": "action",
+                                    "action": "set_debug_mode",
+                                    "debug_mode_enabled": new_val
+                                }))
 
                     if play_btn_rect.collidepoint((mx, my)):
                         if client_state.get('is_local', False):
@@ -2809,12 +2824,13 @@ async def game_loop():
                                     }))
                                     play_sound('click')
                             elif client_state.get('my_color') == 'w':
-                                if gs.get('opponent_joined', False) and gs.get('guest_ready', False):
+                                if gs.get('debug_mode_enabled', False) or (gs.get('opponent_joined', False) and gs.get('guest_ready', False)):
                                     if websocket:
                                         await websocket.send(json.dumps({
                                             "type": "action",
                                             "action": "start_game"
                                         }))
+
 
             elif app_state == "PLAYING":
                 is_local = client_state.get('is_local', False)
@@ -3974,8 +3990,25 @@ async def game_loop():
 
             draw_fancy_btn(screen, "ON" if ik_enabled else "OFF", fonts['small'], btn_color_4, h_color_4, (255, 255, 255), btn_rect_4, is_hover=btn_rect_4.collidepoint(mouse) and client_state.get('my_color') != 'b', custom_radius=6)
             
+            # Row 5: Debug
+            if not client_state.get('is_local', False):
+                box_y_5 = box_y_start + row_gap * 4
+                rect_row_5 = pygame.Rect(box_x, box_y_5, box_w, box_h)
+                draw_rect_aa(screen, (30, 28, 28), rect_row_5, 8)
+                draw_rect_aa(screen, (100, 100, 105), rect_row_5, 8, 2)
+                
+                debug_lbl = fonts['big'].render("Debug", True, (200, 200, 200))
+                screen.blit(debug_lbl, (box_x + 20, box_y_5 + (box_h - debug_lbl.get_height()) // 2))
+                
+                btn_rect_5 = pygame.Rect(btn_x, box_y_5 + (box_h - btn_h) // 2, btn_w, btn_h)
+                debug_enabled = client_state.get('debug_mode_enabled', False)
+                btn_color_5 = (40, 160, 80) if debug_enabled else (70, 70, 75)
+                h_color_5 = (50, 180, 95) if debug_enabled else (90, 90, 95)
+                
+                draw_fancy_btn(screen, "ON" if debug_enabled else "OFF", fonts['small'], btn_color_5, h_color_5, (255, 255, 255), btn_rect_5, is_hover=btn_rect_5.collidepoint(mouse) and client_state.get('my_color') != 'b', custom_radius=6)
+
             # --- 5. Play Button ---
-            play_btn_y = box_y_start + row_gap * 3 + box_h + 30
+            play_btn_y = box_y_start + row_gap * 4 + box_h + 30
             play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
 
             if client_state.get('my_color') == 'b':
@@ -3985,7 +4018,7 @@ async def game_loop():
                 hov_c = (60, 180, 100) if is_ready else (90, 90, 95)
                 draw_fancy_btn(screen, "pronto", title_font, base_c, hov_c, (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)
             else:
-                can_play = client_state.get('is_local', False) or (gs.get('opponent_joined', False) and gs.get('guest_ready', False))
+                can_play = client_state.get('is_local', False) or (gs.get('opponent_joined', False) and gs.get('guest_ready', False)) or client_state.get('debug_mode_enabled', False)
                 play_hover = play_btn_rect.collidepoint(mouse) and can_play
                 if can_play:
                     base_c = (35, 130, 65)

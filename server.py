@@ -83,6 +83,7 @@ async def broadcast_lobby(room_code):
                 "disable_undo_placeholder": state.get('disable_undo_placeholder', False),
                 "score_to_win": state.get('score_to_win', False),
                 "ice_king_enabled": state.get('ice_king_enabled', False),
+                "debug_mode_enabled": state.get('debug_mode_enabled', False),
             }
         }
         msg = json.dumps(lobby_data)
@@ -266,6 +267,13 @@ async def handler(websocket):
                             await broadcast_lobby(room_code)
                         continue
 
+                    elif action == 'set_debug_mode':
+                        if color == 'w':
+                            gs['debug_mode_enabled'] = data.get('debug_mode_enabled', False)
+                            gs['guest_ready'] = False
+                            await broadcast_lobby(room_code)
+                        continue
+
                     elif action == 'set_ready':
                         if color == 'b':
                             gs['guest_ready'] = data.get('guest_ready', False)
@@ -289,7 +297,8 @@ async def handler(websocket):
                         continue
 
                     elif action == 'start_game':
-                        if color == 'w' and gs.get('opponent_joined', False) and gs.get('guest_ready', False):
+                        if color == 'w' and (gs.get('debug_mode_enabled', False) or (gs.get('opponent_joined', False) and gs.get('guest_ready', False))):
+
                             gs['game_started'] = True
                             gs['turn_start_snapshot'] = copy.deepcopy(gs)
                             if room_code in room_timers:
@@ -346,7 +355,7 @@ async def handler(websocket):
                             await broadcast_state(room_code)
                         continue
 
-                    if gs['turn'] != color:
+                    if gs['turn'] != color and not gs.get('debug_mode_enabled', False):
                         continue
 
                     effective_color = color

@@ -121,7 +121,6 @@ class MechanicsManager:
         if save_undo_fn:
             save_undo_fn(client_state, gs)
         
-        print(f"DEBUG: toggle_hidden | drafting: {client_state.get('drafting')} | is_local: {is_local}")
         if client_state.get('drafting') or not is_local:
             if not client_state.get('drafting'):
                 client_state['drafting'] = True
