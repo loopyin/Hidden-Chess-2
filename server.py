@@ -355,10 +355,11 @@ async def handler(websocket):
                             await broadcast_state(room_code)
                         continue
 
-                    if gs['turn'] != color and not gs.get('debug_mode_enabled', False):
+                    can_move = (gs['turn'] == color) or gs.get('debug_mode_enabled', False) or (gs.get('white_controls_black', False) and color == 'w')
+                    if not can_move:
                         continue
 
-                    if gs.get('debug_mode_enabled', False):
+                    if gs.get('debug_mode_enabled', False) or (gs.get('white_controls_black', False) and color == 'w'):
                         effective_color = gs['turn']
                     else:
                         effective_color = color

@@ -187,7 +187,14 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
 
 
 def legal(gs, row, fc):
-    c = gs['turn']
+    p_raw = gs['board'][row][fc]
+    if not p_raw: return []
+    piece_color = pc(p_raw)
+    if gs.get('white_controls_black', False):
+        c = piece_color
+    else:
+        c = gs['turn']
+        
     if (row, fc) in gs.get('frozen_pieces', set()):
         return []
     tb = get_true_board(gs, c)
@@ -195,7 +202,7 @@ def legal(gs, row, fc):
     p = tb[row][fc]
     res = []
     if not p: return res
-
+    
     my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
     if gs.get('fakeout_active') and (row, fc) in my_hidden:
         val = my_hidden[(row, fc)]
@@ -657,7 +664,12 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
 
 def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
     board = gs['board']
-    c = gs['turn']
+    p_raw = board[fr][fc]
+    piece_color = pc(p_raw)
+    if gs.get('white_controls_black', False):
+        c = piece_color
+    else:
+        c = gs['turn']
     my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
     enemy_hidden = gs['hidden_b'] if c == 'w' else gs['hidden_w']
 
@@ -966,8 +978,12 @@ def get_ui_selection(gs, r, c, draft_moves=None):
     active_color = gs['turn']
     
     curr_dgs = get_draft_state(gs, draft_moves) if is_drafting else gs
-    tb = get_true_board(curr_dgs, active_color)
-    my_hidden = curr_dgs['hidden_w'] if active_color == 'w' else curr_dgs['hidden_b']
+    if curr_dgs.get('white_controls_black', False):
+        tb = get_absolute_board(curr_dgs)
+        my_hidden = {**curr_dgs['hidden_w'], **curr_dgs['hidden_b']}
+    else:
+        tb = get_true_board(curr_dgs, active_color)
+        my_hidden = curr_dgs['hidden_w'] if active_color == 'w' else curr_dgs['hidden_b']
     
     can_select_anything = True
     if curr_dgs.get('fakeout_active'):
