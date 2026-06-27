@@ -5,7 +5,6 @@ import copy
 import random
 import string
 import threading
-import requests
 from chess_logic import make_state, exec_move, end_turn, legal, serialize_state, can_afford, alg, deactivate_plies, \
     get_next_turn_from_queue, compare_turns, pop_next_turn_from_queue, process_next_queues, ice_king_interaction
 from draft_simulator import get_draft_state
