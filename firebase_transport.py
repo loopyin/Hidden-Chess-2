@@ -6,7 +6,7 @@ import random
 import string
 import threading
 from chess_logic import make_state, exec_move, end_turn, legal, serialize_state, can_afford, alg, deactivate_plies, \
-    get_next_turn_from_queue, compare_turns, pop_next_turn_from_queue, process_next_queues, ice_king_interaction, register_predict_move
+    get_next_turn_from_queue, compare_turns, pop_next_turn_from_queue, process_next_queues, ice_king_interaction, register_predict_move, _register_revealed_trail
 from draft_simulator import get_draft_state
 from firebase_db import firebase_client
 from event_recorder import get_recorder
@@ -231,6 +231,7 @@ class MockWebsocket:
                                     is_f = val.is_fakeout if hasattr(val, 'is_fakeout') else (val[3] if len(val) > 3 else False)
                                     if pub_pos == (cr2, cc3) or tp == (cr2, cc3):
                                         deactivate_plies(gs, val.plies if hasattr(val, 'plies') else (val[5] if len(val) > 5 else []))
+                                        _register_revealed_trail(gs, val)
                                         if is_f:
                                             ghost_type = 'fakeout'
                                             to_remove.append(tp)
@@ -265,6 +266,7 @@ class MockWebsocket:
                                     gs['log'].append(f"SYS_HIDDEN|Peça revelada em {alg(cc3, cr2)}!")
 
                                 deactivate_plies(gs, plies)
+                                _register_revealed_trail(gs, val)
                                 if 'reveal_flashes' not in gs:
                                     gs['reveal_flashes'] = []
                                 gs['reveal_flashes'].append([cr2, cc3, 'fakeout' if is_f else 'hidden'])
@@ -289,6 +291,8 @@ class MockWebsocket:
                                     is_fakeout = gs.get('fakeout_active', False)
                                     res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
                                     if res:
+                                        gs['hidden_mode'] = False
+                                        gs['fakeout_active'] = False
                                         if 'current_turn_actions' not in gs:
                                             gs['current_turn_actions'] = []
                                         gs['current_turn_actions'].append({
@@ -301,6 +305,17 @@ class MockWebsocket:
                                     gs['ghost_capture_flash'] = None
                                     gs['ghost_capture_type'] = None
                                     gs['reveal_flashes'] = []
+                            else:
+                                asyncio.create_task(self.queue.put(json.dumps({
+                                    "type": "state_update",
+                                    "state": serialize_state(self.gs, self.color)
+                                })))
+
+                    elif action == 'confirm_draft':
+                        if gs.get('locked_for_draft'):
+                            gs['locked_for_draft'] = False
+                            process_next_queues(gs, max_moves=1)
+                            needs_broadcast = True
 
                     elif action == 'predict_move':
                         fr, fc = data['fr'], data['fc']
@@ -317,7 +332,10 @@ class MockWebsocket:
                                 if register_predict_move(gs, color, fr, fc, tr, tc, promo, cost=0.2):
                                     needs_broadcast = True
                             else:
-                                pass
+                                asyncio.create_task(self.queue.put(json.dumps({
+                                    "type": "state_update",
+                                    "state": serialize_state(self.gs, self.color)
+                                })))
 
                     elif action == 'ice_king':
                         kr, kc = data['kr'], data['kc']
@@ -350,9 +368,18 @@ class MockWebsocket:
                 from chess_logic import deserialize_state
                 state_dict = json.loads(state_str)
                 self.recorder.record('on_update', room_code=self.room_code, state_keys=list(state_dict.keys())[:24])
-                # If the state from Firebase has changes we need (like opponent moved, or joined)
-                # We deserialize and update our gs
                 new_gs = deserialize_state(state_dict)
+                
+                # Prevent stale reads from overwriting local state
+                if self.gs:
+                    old_tc = self.gs.get('turn_count', 0)
+                    new_tc = new_gs.get('turn_count', 0)
+                    old_log_len = len(self.gs.get('log', []))
+                    new_log_len = len(new_gs.get('log', []))
+                    if new_tc < old_tc or (new_tc == old_tc and new_log_len < old_log_len):
+                        # Stale state from polling, ignore
+                        return
+
                 self.gs = new_gs
                 # Push to asyncio queue for the client to process
                 asyncio.run_coroutine_threadsafe(

@@ -174,10 +174,10 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
 
     return False
 
-def legal(gs, row, fc, as_fakeout=False):
+def legal(gs, row, fc, as_fakeout=False, return_visual=False, ui_selection=False):
     c = gs['turn']
     if (row, fc) in gs.get('frozen_pieces', set()):
-        return []
+        return ([], []) if return_visual else []
         
     my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
     for t_pos, val in my_hidden.items():
@@ -189,26 +189,31 @@ def legal(gs, row, fc, as_fakeout=False):
     abs_b = get_absolute_board(gs)
     p = tb[row][fc]
     res = []
-    if not p: return res
+    if not p: return (res, res) if return_visual else res
 
     if pt(p) == 'K' and (gs.get('hidden_mode') or gs.get('fakeout_active') or as_fakeout):
-        return res
+        return (res, res) if return_visual else res
 
     if (gs.get('fakeout_active') or as_fakeout) and (row, fc) in my_hidden:
         val = my_hidden[(row, fc)]
         pub_pos = val.pub_pos
         if pub_pos:
             fake_tb = cpb(tb)
+            for hr, hc in my_hidden.keys():
+                fake_tb[hr][hc] = None
             fake_tb[pub_pos[0]][pub_pos[1]] = p
-            # Keep the true piece to act as an obstacle
             
             fake_abs = cpb(abs_b)
             fake_abs[pub_pos[0]][pub_pos[1]] = p
-            # Keep the true piece to act as an obstacle
 
             for tr, tc in pseudo(fake_tb, fake_abs, pub_pos[0], pub_pos[1], gs['ep'], gs['cr']):
+                if (tr, tc) in my_hidden:
+                    continue
+
                 target = fake_abs[tr][tc]
                 if target and pt(target) == 'K': continue
+                visual_target = gs['board'][tr][tc]
+                if visual_target and pc(visual_target) == c: continue
 
                 if check_fakeout_collision(c, pub_pos[0], pub_pos[1], tr, tc, p, gs):
                     continue
@@ -223,11 +228,45 @@ def legal(gs, row, fc, as_fakeout=False):
                         nb_check[hr][hc] = ghost
                 if not in_check(nb_check, c):
                     res.append((tr, tc))
-            return res
+            return (res, res) if return_visual else res
 
-    for tr, tc in pseudo(tb, abs_b, row, fc, gs['ep'], gs['cr']):
+    normal_pseudo = pseudo(tb, abs_b, row, fc, gs['ep'], gs['cr'])
+    pierced_pseudo = []
+    
+    pts = gs.get('pts', {}).get(c, 0)
+    enemy_hidden = gs.get('hidden_b', {}) if c == 'w' else gs.get('hidden_w', {})
+    if isinstance(pts, (int, float)) and pts >= 1:
+        has_illusions = False
+        pierce_b = cpb(tb)
+        if ui_selection:
+            for r in range(8):
+                for col_idx in range(8):
+                    pc_target = pierce_b[r][col_idx]
+                    if pc_target and pc(pc_target) != c:
+                        pierce_b[r][col_idx] = None
+                        has_illusions = True
+        else:
+            for val in enemy_hidden.values():
+                if val.pub_pos:
+                    pierce_b[val.pub_pos[0]][val.pub_pos[1]] = None
+                    has_illusions = True
+                
+        if has_illusions:
+            for tr, tc in pseudo(pierce_b, abs_b, row, fc, gs['ep'], gs['cr']):
+                if (tr, tc) not in normal_pseudo:
+                    # Make sure it actually pierced something in the path, not just landed on an illusion
+                    # For pawns, if they push onto an illusion, they would ghost capture it without paying 1 pt if we let them.
+                    # But if we want it to be a pierce move, they must pay 1 pt?
+                    # The prompt says "em uma casa que estaria no RANGE da peça dropada SE NÃO houvessem obstáculos no caminho"
+                    # We can just add it to pierced_pseudo. exec_move will charge 1 pt if it pierces.
+                    pierced_pseudo.append((tr, tc))
+
+    visual_res = []
+    for tr, tc in normal_pseudo + pierced_pseudo:
         target = abs_b[tr][tc]
         if target and pt(target) == 'K': continue
+        visual_target = gs['board'][tr][tc]
+        if visual_target and pc(visual_target) == c: continue
 
         if gs.get('fakeout_active'):
             if check_fakeout_collision(c, row, fc, tr, tc, p, gs):
@@ -243,6 +282,10 @@ def legal(gs, row, fc, as_fakeout=False):
                 nb_check[hr][hc] = ghost
         if not in_check(nb_check, c):
             res.append((tr, tc))
+            if (tr, tc) in normal_pseudo:
+                visual_res.append((tr, tc))
+    if return_visual:
+        return res, visual_res
     return res
 
 def all_legal(gs):
@@ -351,6 +394,8 @@ def make_state():
         ghost_capture_flash=None,
         ghost_capture_type=None,
         reveal_flashes=[],
+        revealed_trails=[],
+        suppress_last_move=False,
         fakeout_active=False,
         fakeout_used=False,
         fakeout_mode_enabled=True,
@@ -364,12 +409,12 @@ def make_state():
     )
 
 def hidden_cost(gs):
-    hs = gs.get('hidden_seq', {'w': 0, 'b': 0})
+    hs = gs.get('hidden_seq') or {'w': 0, 'b': 0}
     seq = hs if isinstance(hs, int) else hs.get(gs['turn'], 0)
     return 2 ** (seq + gs.get('hidden_count', 0))
 
 def fakeout_cost(gs):
-    fs = gs.get('fakeout_seq', {'w': 0, 'b': 0})
+    fs = gs.get('fakeout_seq') or {'w': 0, 'b': 0}
     seq = fs if isinstance(fs, int) else fs.get(gs['turn'], 0)
     return 2 ** (seq + gs.get('fakeout_count', 0))
 
@@ -407,9 +452,6 @@ def resolve_pending_prediction(gs, mover_color, actual_move):
 
     q_key = f'next_queue_{predictor}'
     if not gs.get(q_key):
-        pts = gs['pts'].get(predictor, 0)
-        if isinstance(pts, (int, float)):
-            gs['pts'][predictor] = round(pts + 0.2, 2)
         gs['last_predict'] = None
         gs['last_predict_visible_to'] = None
         return None
@@ -423,18 +465,89 @@ def resolve_pending_prediction(gs, mover_color, actual_move):
     gs['last_predict_visible_to'] = None
     return matched
 def can_afford(gs):
-    pts = gs['pts'][gs['turn']]
+    hs = gs.get('hidden_seq') or {'w': 0, 'b': 0}
+    seq = hs if isinstance(hs, int) else hs.get(gs.get('turn', 'w'), 0)
+    if seq + gs.get('hidden_count', 0) >= 4:
+        return False
+    pts_dict = gs.get('pts') or {}
+    pts = pts_dict.get(gs.get('turn', 'w'), 0)
     if isinstance(pts, (int, float)):
         if pts < 0: return False
         return pts >= hidden_cost(gs)
     return False
 
 def can_afford_fakeout(gs):
-    pts = gs['pts'][gs['turn']]
+    fs = gs.get('fakeout_seq') or {'w': 0, 'b': 0}
+    seq = fs if isinstance(fs, int) else fs.get(gs.get('turn', 'w'), 0)
+    if seq + gs.get('fakeout_count', 0) >= 4:
+        return False
+    pts_dict = gs.get('pts') or {}
+    pts = pts_dict.get(gs.get('turn', 'w'), 0)
     if isinstance(pts, (int, float)):
         if pts < 0: return False
         return pts >= fakeout_cost(gs)
     return False
+
+
+
+def _trail_payload_from_meta(val):
+    if isinstance(val, dict):
+        is_fakeout = bool(val.get('is_fakeout', False))
+        path = val.get('fakeout_path') if is_fakeout and val.get('fakeout_path') else val.get('path', [])
+        return {
+            'path': list(path or []),
+            'is_fakeout': is_fakeout,
+            'pub_pos': list(val.get('pub_pos')) if val.get('pub_pos') else None,
+        }
+    if isinstance(val, (list, tuple)):
+        pub_pos = val[0] if len(val) > 0 else None
+        is_fakeout = bool(val[3]) if len(val) > 3 else False
+        path = val[4] if is_fakeout and len(val) > 4 and val[4] else (val[2] if len(val) > 2 else [])
+        return {
+            'path': [tuple(x) for x in (path or [])],
+            'is_fakeout': is_fakeout,
+            'pub_pos': list(pub_pos) if pub_pos else None,
+        }
+    path = list(val.fakeout_path) if getattr(val, 'is_fakeout', False) and getattr(val, 'fakeout_path', None) else list(getattr(val, 'path', []))
+    pub_pos = getattr(val, 'pub_pos', None)
+    return {
+        'path': path,
+        'is_fakeout': bool(getattr(val, 'is_fakeout', False)),
+        'pub_pos': list(pub_pos) if pub_pos else None,
+    }
+
+
+def _register_revealed_trail(gs, val):
+    payload = _trail_payload_from_meta(val)
+    if not payload['path']:
+        return
+    trails = gs.setdefault('revealed_trails', [])
+    expire_turn_count = gs.get('turn_count', 0) + 2
+    payload = dict(payload)
+    payload['expire_turn_count'] = expire_turn_count
+    # Avoid duplicates when the same hidden piece is revealed by multiple systems in one turn.
+    for existing in trails:
+        if isinstance(existing, dict) and existing.get('path') == payload['path'] and existing.get('is_fakeout', False) == payload['is_fakeout']:
+            existing['expire_turn_count'] = max(existing.get('expire_turn_count', expire_turn_count), expire_turn_count)
+            return
+    trails.append(payload)
+
+
+def _prune_revealed_trails(gs):
+    current_turn_count = gs.get('turn_count', 0)
+    trails = []
+    for trail in gs.get('revealed_trails', []):
+        expire_turn_count = None
+        if isinstance(trail, dict):
+            expire_turn_count = trail.get('expire_turn_count')
+        if expire_turn_count is None or expire_turn_count > current_turn_count:
+            trails.append(trail)
+    gs['revealed_trails'] = trails
+
+
+def _clear_revealed_trails(gs):
+    # Backward-compatible alias kept for older call sites.
+    _prune_revealed_trails(gs)
 
 def end_turn(gs, process_queue=False):
     if gs['game_over']: return
@@ -445,10 +558,11 @@ def end_turn(gs, process_queue=False):
 
     curr_color = gs['turn']
 
-    if isinstance(gs.get('hidden_seq'), int):
+    if not isinstance(gs.get('hidden_seq'), dict):
         gs['hidden_seq'] = {'w': 0, 'b': 0}
         
-    gs.setdefault('fakeout_seq', {'w': 0, 'b': 0})
+    if not isinstance(gs.get('fakeout_seq'), dict):
+        gs['fakeout_seq'] = {'w': 0, 'b': 0}
 
     if gs.get('hidden_count', 0) > 0:
         gs['hidden_seq'][curr_color] = gs['hidden_seq'].get(curr_color, 0) + 1
@@ -474,6 +588,7 @@ def end_turn(gs, process_queue=False):
             for (tr, tc), val in list(my_hidden.items()):
                 pub_pos, hp = val.pub_pos, val.piece
                 is_f = val.is_fakeout
+                _register_revealed_trail(gs, val)
                 gs['board'][tr][tc] = hp
                 if pub_pos:
                     gs['board'][pub_pos[0]][pub_pos[1]] = None
@@ -481,6 +596,8 @@ def end_turn(gs, process_queue=False):
                 gs['captured_b'].discard((tr, tc))
                 deactivate_plies(gs, val.plies)
                 gs['reveal_flashes'].append([tr, tc, 'fakeout' if is_f else 'hidden'])
+            if my_hidden:
+                gs['suppress_last_move'] = True
             my_hidden.clear()
             gs['log'].append(f"Sequência quebrada!")
 
@@ -490,6 +607,7 @@ def end_turn(gs, process_queue=False):
     gs['fakeout_count'] = 0
     gs['normal_done'] = False
     gs['turn_count'] += 1
+    _prune_revealed_trails(gs)
     gs['fakeout_active'] = False
     gs['fakeout_used'] = False
     gs['moved_this_turn'] = set()
@@ -510,6 +628,7 @@ def end_turn(gs, process_queue=False):
             for (tr, tc), val in enemy_hidden.items():
                 pub_pos, hp = val.pub_pos, val.piece
                 is_f = val.is_fakeout
+                _register_revealed_trail(gs, val)
                 gs['board'][tr][tc] = hp
                 if pub_pos:
                     gs['board'][pub_pos[0]][pub_pos[1]] = None
@@ -517,6 +636,8 @@ def end_turn(gs, process_queue=False):
                 gs['captured_w'].discard((tr, tc))
                 gs['captured_b'].discard((tr, tc))
                 gs['reveal_flashes'].append([tr, tc, 'fakeout' if is_f else 'hidden'])
+            if enemy_hidden:
+                gs['suppress_last_move'] = True
 
             enemy_hidden.clear()
             gs['hidden_seq'][enemy] = 0
@@ -552,8 +673,8 @@ def end_turn(gs, process_queue=False):
             # Remove the flag so it doesn't trigger again
             gs[q_key][0].pop('predict_success', None)
             
-            # Process the queued moves
-            process_next_queues(gs, max_moves=1)
+            # Lock the player to require a double click to execute the drafted move
+            gs['locked_for_draft'] = True
 
 def get_next_turn_from_queue(gs, color):
     q_key = f'next_queue_{color}'
@@ -708,6 +829,7 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
     return res
 
 def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
+    gs['suppress_last_move'] = False
     board = gs['board']
     c = gs['turn']
     my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
@@ -742,32 +864,98 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         if val.pub_pos:
             cfr, cfc = val.pub_pos
 
+    t = pt(p)
+    
+    def get_dir(a, b):
+        return 0 if a == b else (1 if b > a else -1)
+
+    # Check for pierced illusions (illusions in the path of the move)
+    pierced_illusions = []
+    if t == 'K' and abs(cfc - tc) == 2:
+        step = 1 if tc > cfc else -1
+        check_cols = [cfc + step, cfc + 2 * step]
+        if tc == 2: check_cols.append(1)
+        for col in check_cols:
+            if col == tc: continue
+            for t_pos, val in list(enemy_hidden.items()):
+                if val.pub_pos == (cfr, col): pierced_illusions.append(t_pos)
+    elif t not in ('N', 'K'):
+        dr, dc = get_dir(cfr, tr), get_dir(cfc, tc)
+        r, cc = cfr + dr, cfc + dc
+        while 0 <= r < 8 and 0 <= cc < 8:
+            if (r, cc) == (tr, tc): break
+            for t_pos, val in list(enemy_hidden.items()):
+                if val.pub_pos == (r, cc): pierced_illusions.append(t_pos)
+            r += dr
+            cc += dc
+            
+    if pierced_illusions:
+        gs['pts'][c] = round(gs['pts'].get(c, 0) - 1, 2)
+        for t_pos in pierced_illusions:
+            if t_pos in enemy_hidden:
+                val = enemy_hidden[t_pos]
+                r, cc = val.pub_pos
+                is_f = val.is_fakeout
+                enemy_hidden[t_pos] = PieceMetaModifier(pub_pos=None, piece=val.piece, path=val.path, is_fakeout=val.is_fakeout, fakeout_path=val.fakeout_path, plies=val.plies)
+                board[r][cc] = None
+                if is_f:
+                    gs['log'].append(f"SYS_FAKEOUT|Ilusão desfeita em {alg(cc, r)}!")
+                else:
+                    gs['log'].append(f"SYS_HIDDEN|Ilusão desfeita em {alg(cc, r)}!")
+                if 'reveal_flashes' not in gs:
+                    gs['reveal_flashes'] = []
+                gs['reveal_flashes'].append([r, cc, 'fakeout' if is_f else 'hidden'])
+
     # Check if this is a capture against the old position of an opposing piece (ghost piece)
+    # OR moving onto the pub_pos of an allied illusory piece
     ghost_found = None
+    ghost_is_mine = False
+    
     for t_pos, val in enemy_hidden.items():
-        p_pos, hp = val.pub_pos, val.piece
-        if p_pos == (tr, tc):
+        if val.pub_pos == (tr, tc):
             ghost_found = t_pos
             break
+            
+    if not ghost_found:
+        for t_pos, val in my_hidden.items():
+            if val.pub_pos == (tr, tc) and t_pos != (fr, fc):
+                ghost_found = t_pos
+                ghost_is_mine = True
+                break
 
     if ghost_found is not None:
         # A ghost capture occurred!
         # 1. The captured piece disappears from the public board
         board[tr][tc] = None
-        # 2. In enemy_hidden, clear pub_pos to None
-        val = enemy_hidden[ghost_found]
-        is_f = val.is_fakeout
-        enemy_hidden[ghost_found] = PieceMetaModifier(pub_pos=None, piece=val.piece, path=val.path, is_fakeout=val.is_fakeout, fakeout_path=val.fakeout_path, plies=val.plies)
+        
+        # 2. In hidden dict, clear pub_pos to None
+        if ghost_is_mine:
+            val = my_hidden[ghost_found]
+            is_f = val.is_fakeout
+            my_hidden[ghost_found] = PieceMetaModifier(pub_pos=None, piece=val.piece, path=val.path, is_fakeout=val.is_fakeout, fakeout_path=val.fakeout_path, plies=val.plies)
+        else:
+            val = enemy_hidden[ghost_found]
+            is_f = val.is_fakeout
+            enemy_hidden[ghost_found] = PieceMetaModifier(pub_pos=None, piece=val.piece, path=val.path, is_fakeout=val.is_fakeout, fakeout_path=val.fakeout_path, plies=val.plies)
+            if 'frozen_pieces' in gs:
+                gs['frozen_pieces'].discard((tr, tc))
+            
         # 3. Add to the log
         if is_f:
             gs['log'].append(f"SYS_FAKEOUT|Ilusão desfeita em {alg(tc, tr)}!")
         else:
             gs['log'].append(f"SYS_HIDDEN|Ilusão desfeita em {alg(tc, tr)}!")
-        # 4. Set the ghost_capture_flash coordinate
-        gs['ghost_capture_flash'] = (tr, tc)
-        gs['ghost_capture_type'] = 'fakeout' if is_f else 'hidden'
-        # 5. Return a special status "ghost_capture" and keep the active player's turn to redo their move.
-        return "ghost_capture"
+            
+        if pt(p) == 'P' and fc != tc:
+            # 4. Set the ghost_capture_flash coordinate
+            gs['ghost_capture_flash'] = (tr, tc)
+            gs['ghost_capture_type'] = 'fakeout' if is_f else 'hidden'
+            # 5. Return a special status "ghost_capture" and keep the active player's turn to redo their move.
+            return "ghost_capture"
+        else:
+            if 'reveal_flashes' not in gs:
+                gs['reveal_flashes'] = []
+            gs['reveal_flashes'].append([tr, tc, 'fakeout' if is_f else 'hidden'])
 
     def get_dir(a, b):
         return 0 if a == b else (1 if b > a else -1)
@@ -809,6 +997,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         val = enemy_hidden.pop((cr, cc))
         pub_pos, hp = val.pub_pos, val.piece
         is_f = val.is_fakeout
+        _register_revealed_trail(gs, val)
         deactivate_plies(gs, val.plies)
 
         if pub_pos: board[pub_pos[0]][pub_pos[1]] = None
@@ -828,6 +1017,8 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         gs['pts'][c] = round(gs['pts'][c] + VALUES.get(pt(cap_true), 0), 2)
         enemy_captured = gs['captured_w'] if c == 'b' else gs['captured_b']
         enemy_captured.add((tr, tc))
+        if 'frozen_pieces' in gs:
+            gs['frozen_pieces'].discard((tr, tc))
 
     board_for_notation = board if (is_fakeout and (fr, fc) in my_hidden) else tb
     note = notation(board_for_notation, cfr, cfc, tr, tc, gs['ep'], promo)
@@ -894,6 +1085,8 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
                 enemy_path = val.path
                 is_f = val.is_fakeout
                 enemy_hidden[t_pos] = PieceMetaModifier(pub_pos=None, piece=hp, path=enemy_path, is_fakeout=is_f, fakeout_path=[], plies=[])
+                if 'frozen_pieces' in gs:
+                    gs['frozen_pieces'].discard((tr, tc))
 
         gs['captured_w'].discard((tr, tc))
         gs['captured_b'].discard((tr, tc))
@@ -982,6 +1175,8 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
                 f_path = val.fakeout_path
                 plies = val.plies
                 enemy_hidden[t_pos] = PieceMetaModifier(pub_pos=None, piece=hp, path=path, is_fakeout=is_f, fakeout_path=f_path, plies=plies)
+                if 'frozen_pieces' in gs:
+                    gs['frozen_pieces'].discard((tr, tc))
 
         gs['captured_w'].discard((tr, tc))
         gs['captured_b'].discard((tr, tc))
@@ -1000,6 +1195,8 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
     if pt(p) == 'R':
         if fr == (7 if c == 'w' else 0) and fc == 0: gs['cr'][c + 'Q'] = False
         if fr == (7 if c == 'w' else 0) and fc == 7: gs['cr'][c + 'K'] = False
+    if 'frozen_pieces' in gs:
+        gs['frozen_pieces'].discard((tr, tc))
     return True
 
 def deactivate_plies(gs, plies):
@@ -1047,7 +1244,7 @@ def get_ui_selection(gs, r, c, draft_moves=None):
             can_select_anything = False
             
     if not can_select_anything:
-        return None, []
+        return None, [], []
     
     target_hidden_true_pos = None
     for t_pos, val in my_hidden.items():
@@ -1057,20 +1254,21 @@ def get_ui_selection(gs, r, c, draft_moves=None):
                 
     if target_hidden_true_pos is not None:
         sel = (r, c)
-        legals = legal(curr_dgs, target_hidden_true_pos[0], target_hidden_true_pos[1], as_fakeout=True)
-        return sel, legals
+        legals, visual_legals = legal(curr_dgs, target_hidden_true_pos[0], target_hidden_true_pos[1], as_fakeout=True, return_visual=True, ui_selection=True)
+        return sel, legals, visual_legals
     else:
         if curr_dgs.get('fakeout_active') and (r, c) in my_hidden:
-            return None, []
+            return None, [], []
         else:
             p = tb[r][c]
             if p and pc(p) == active_color:
-                legals = legal(curr_dgs, r, c)
+                legals, visual_legals = legal(curr_dgs, r, c, return_visual=True, ui_selection=True)
                 # Remove already moved pieces if not drafting
                 if not is_drafting and (r, c) in curr_dgs.get('moved_this_turn', set()):
                     legals = []
-                return (r, c), legals
-            return None, []
+                    visual_legals = []
+                return (r, c), legals, visual_legals
+            return None, [], []
 
 def serialize_state(gs, player_color=None, dgs=None):
     def convert_hidden(hd):
@@ -1403,6 +1601,15 @@ def serialize_state(gs, player_color=None, dgs=None):
 
     hidden_w_safe = convert_hidden(gs['hidden_w']) if player_color in ('w', 'server') else {}
     hidden_b_safe = convert_hidden(gs['hidden_b']) if player_color in ('b', 'server') else {}
+    revealed_trails_safe = [
+        {
+            'path': [list(pos) for pos in trail.get('path', [])],
+            'is_fakeout': trail.get('is_fakeout', False),
+            'pub_pos': list(trail.get('pub_pos')) if trail.get('pub_pos') else None,
+            'expire_turn_count': trail.get('expire_turn_count')
+        }
+        for trail in gs.get('revealed_trails', []) if isinstance(trail, dict)
+    ]
 
     shadow_history_safe = {}
     for ply, info in gs.get('shadow_history', {}).items():
@@ -1419,13 +1626,15 @@ def serialize_state(gs, player_color=None, dgs=None):
         'hidden_w': hidden_w_safe,
         'hidden_b': hidden_b_safe,
         'shadow_history': shadow_history_safe,
+        'revealed_trails': revealed_trails_safe,
+        'suppress_last_move': gs.get('suppress_last_move', False),
         'captured_w': [list(x) for x in gs['captured_w']],
         'captured_b': [list(x) for x in gs['captured_b']],
         'hidden_mode': gs['hidden_mode'] if player_color in ('server', gs['turn']) or gs.get('game_over', False) else False,
         'hidden_count': gs['hidden_count'] if player_color in ('server', gs['turn']) or gs.get('game_over', False) else 0,
-        'hidden_seq': gs.get('hidden_seq', {'w': 0, 'b': 0}),
+        'hidden_seq': gs.get('hidden_seq') or {'w': 0, 'b': 0},
         'fakeout_count': gs.get('fakeout_count', 0) if player_color in ('server', gs['turn']) or gs.get('game_over', False) else 0,
-        'fakeout_seq': gs.get('fakeout_seq', {'w': 0, 'b': 0}),
+        'fakeout_seq': gs.get('fakeout_seq') or {'w': 0, 'b': 0},
         'normal_done': gs['normal_done'],
         'last_move': list(gs['last_move']) if (gs.get('last_move') and (not gs.get('last_move_visible_to') or gs['last_move_visible_to'] == player_color or gs.get('game_over', False))) else None,
         'last_predict': {'by': gs['last_predict']['by'], 'move': list(gs['last_predict']['move'])} if (gs.get('last_predict') and (player_color in ('server', gs.get('last_predict_visible_to')) or gs.get('game_over', False))) else None,
@@ -1449,6 +1658,7 @@ def serialize_state(gs, player_color=None, dgs=None):
         'opponent_joined': gs.get('opponent_joined', False),
         'next_queue_w': clean_queue(gs.get('next_queue_w'), player_color == 'w', 'w'),
         'next_queue_b': clean_queue(gs.get('next_queue_b'), player_color == 'b', 'b'),
+        'locked_for_draft': gs.get('locked_for_draft', False),
         'moved_this_turn': [list(x) for x in gs.get('moved_this_turn', set())] if player_color in ('server', gs['turn']) or gs.get('game_over', False) else [],
         'frozen_pieces': [list(p) for p in gs.get('frozen_pieces', set())]
     }
@@ -1487,11 +1697,27 @@ def deserialize_state(data):
         for k, v in data['shadow_history'].items():
             shadow_hist[int(k)] = v
 
-    hs = data.get('hidden_seq', {'w': 0, 'b': 0})
+    revealed_trails = []
+    for trail in data.get('revealed_trails', []):
+        if isinstance(trail, dict):
+            revealed_trails.append({
+                'path': [tuple(x) for x in trail.get('path', [])],
+                'is_fakeout': trail.get('is_fakeout', False),
+                'pub_pos': tuple(trail['pub_pos']) if trail.get('pub_pos') else None,
+                'expire_turn_count': trail.get('expire_turn_count')
+            })
+        elif isinstance(trail, (list, tuple)) and len(trail) >= 2:
+            # Backward-compatible fallback
+            path = trail[0]
+            is_fakeout = bool(trail[1])
+            revealed_trails.append({'path': [tuple(x) for x in path], 'is_fakeout': is_fakeout, 'expire_turn_count': None})
+
+    hs = data.get('hidden_seq') or {'w': 0, 'b': 0}
     if isinstance(hs, int):
         hs = {'w': hs, 'b': hs}
 
     return {
+        'is_online_client': True,
         'board': data['board'],
         'turn': data['turn'],
         'ep': tuple(data['ep']) if data['ep'] else None,
@@ -1500,13 +1726,15 @@ def deserialize_state(data):
         'hidden_w': parse_hidden(data['hidden_w']),
         'hidden_b': parse_hidden(data['hidden_b']),
         'shadow_history': shadow_hist,
+        'revealed_trails': revealed_trails,
+        'suppress_last_move': data.get('suppress_last_move', False),
         'captured_w': set(tuple(x) for x in data['captured_w']),
         'captured_b': set(tuple(x) for x in data['captured_b']),
         'hidden_mode': data['hidden_mode'],
         'hidden_count': data['hidden_count'],
         'hidden_seq': hs,
         'fakeout_count': data.get('fakeout_count', 0),
-        'fakeout_seq': data.get('fakeout_seq', {'w': 0, 'b': 0}),
+        'fakeout_seq': data.get('fakeout_seq') or {'w': 0, 'b': 0},
         'normal_done': data['normal_done'],
         'last_move': tuple(data['last_move']) if data['last_move'] else None,
         'last_predict': {'by': data['last_predict']['by'], 'move': tuple(data['last_predict']['move'])} if data.get('last_predict') else None,
@@ -1531,6 +1759,7 @@ def deserialize_state(data):
         'opponent_joined': data.get('opponent_joined', False),
         'next_queue_w': data.get('next_queue_w', []),
         'next_queue_b': data.get('next_queue_b', []),
+        'locked_for_draft': data.get('locked_for_draft', False),
         'moved_this_turn': set(tuple(x) for x in data.get('moved_this_turn', [])),
         'frozen_pieces': set(tuple(p) for p in data.get('frozen_pieces', []))
     }

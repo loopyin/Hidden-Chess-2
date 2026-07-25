@@ -4,6 +4,28 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Any
 from chess_logic import in_check, attacked, pc, opp
 
+
+def expand_path(path):
+    if not path or len(path) < 2:
+        return path
+    res = [path[0]]
+    for i in range(len(path) - 1):
+        p1 = path[i]
+        p2 = path[i + 1]
+        dr = abs(p2[0] - p1[0])
+        dc = abs(p2[1] - p1[1])
+        if dr == 2 and dc == 1:
+            corner = (p2[0], p1[1])
+            if corner != res[-1]:
+                res.append(corner)
+        elif dr == 1 and dc == 2:
+            corner = (p1[0], p2[1])
+            if corner != res[-1]:
+                res.append(corner)
+        if p2 != res[-1]:
+            res.append(p2)
+    return res
+
 class VisualEffectsRenderer:
     @staticmethod
     def draw_freeze_overlay(screen, r: int, c: int, x: int, y: int, SQ: int, t_sec: float) -> None:
@@ -194,10 +216,15 @@ class BoardRenderer:
     @staticmethod
     def get_render_state(gs: Dict[str, Any], client_state: Dict[str, Any], abs_b, tb, my_hidden: Dict[Tuple[int, int], Any], show_hidden: bool, curr_b=None) -> List[List[RenderCell]]:
         if curr_b is None: curr_b = gs['board']
+        # Fallbacks keep the renderer usable even when the client module has not injected globals.
+        SQ = globals().get('SQ', 70)
+        BOARD_PX = globals().get('BOARD_PX', SQ * 8)
+        WIN_W = globals().get('WIN_W', BOARD_PX + 250)
         grid = [[RenderCell(r=r, c=c) for c in range(8)] for r in range(8)]
         
         last = gs.get('last_move')
-        if last:
+        suppress_last_move = gs.get('suppress_last_move', False)
+        if last and not suppress_last_move:
             grid[last[0]][last[1]].is_last_move = True
             grid[last[2]][last[3]].is_last_move = True
 
@@ -226,7 +253,7 @@ class BoardRenderer:
                     is_fakeout_drag = True
                     break
 
-        for (lr, lc) in client_state.get('legal_sq', []):
+        for (lr, lc) in client_state.get('visual_legal_sq', client_state.get('legal_sq', [])):
             grid[lr][lc].is_legal = True
             is_cap = False
             if not is_fakeout_drag:
@@ -321,6 +348,29 @@ class BoardRenderer:
                             alpha = int(25 + 95 * ratio)
                             if alpha > grid[pos[0]][pos[1]].orange_path_alpha:
                                 grid[pos[0]][pos[1]].orange_path_alpha = alpha
+
+        # Permanently visible trails for pieces that were spotted this turn.
+        # The actual drawing happens in client.py so the trail is visible in both
+        # online and local play. Here we only expose the path to the render grid.
+        for trail in gs.get('revealed_trails', []):
+            if not isinstance(trail, dict):
+                continue
+            raw_path = trail.get('path', [])
+            path = expand_path(raw_path)
+            if not path or len(path) <= 1:
+                continue
+
+            is_f = trail.get('is_fakeout', False)
+            alpha_key = 'orange_path_alpha' if is_f else 'blue_path_alpha'
+            N = len(path)
+            for idx, pos in enumerate(path):
+                if not (0 <= pos[0] < 8 and 0 <= pos[1] < 8):
+                    continue
+                ratio = (idx + 1) / N
+                alpha = int(35 + 125 * ratio)
+                cell = grid[pos[0]][pos[1]]
+                if getattr(cell, alpha_key) < alpha:
+                    setattr(cell, alpha_key, alpha)
 
         # Piece assignments
         board = gs['board']

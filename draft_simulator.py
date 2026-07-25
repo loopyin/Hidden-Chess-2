@@ -3,8 +3,8 @@ from chess_logic import exec_move, opp
 def transition_draft_turn(dgs):
     c = dgs['turn']
     
-    if isinstance(dgs.get('hidden_seq'), int): dgs['hidden_seq'] = {'w': 0, 'b': 0}
-    if isinstance(dgs.get('fakeout_seq'), int): dgs['fakeout_seq'] = {'w': 0, 'b': 0}
+    if not isinstance(dgs.get('hidden_seq'), dict): dgs['hidden_seq'] = {'w': 0, 'b': 0}
+    if not isinstance(dgs.get('fakeout_seq'), dict): dgs['fakeout_seq'] = {'w': 0, 'b': 0}
     
     if dgs.get('hidden_count', 0) > 0:
         dgs['hidden_seq'][c] = dgs['hidden_seq'].get(c, 0) + 1
