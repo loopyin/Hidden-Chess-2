@@ -2099,7 +2099,9 @@ def draw_flames_list(screen, flames_list, alpha_mult=1.0):
                 elif r > 2.5: color = (255, 0, 0)
                 else: color = (50, 50, 50)
             pygame.draw.circle(fsurf, (*color, alpha), (surf_size // 2, surf_size // 2), curr_r)
-        screen.blit(fsurf, fsurf.get_rect(center=(int(f['x']), int(f['y']))))
+        rx = int(f['x'] + f.get('push_x', 0.0))
+        ry = int(f['y'] + f.get('push_y', 0.0))
+        screen.blit(fsurf, fsurf.get_rect(center=(rx, ry)))
 
 def draw_text_center(screen, text, font, color, y_pos, cx=None):
     surf = font.render(text, True, color)
@@ -2108,10 +2110,87 @@ def draw_text_center(screen, text, font, color, y_pos, cx=None):
     screen.blit(surf, rect)
     return rect
 
-async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, screen, fonts):
-    if not client_state.get('is_dragging_gesture'):
+
+async def resolve_client_conflict(gs, client_state, conflict, websocket, is_local):
+    if is_local:
+        kind, cr2, cc3 = conflict
+        if kind == 'src':
+            gs['board'][cr2][cc3] = None
+            my_cap = gs['captured_w'] if gs['turn'] == 'w' else gs['captured_b']
+            my_cap.discard((cr2, cc3))
+            ghost_type = 'hidden'
+            
+            for h_dict in [gs.get('hidden_w', {}), gs.get('hidden_b', {})]:
+                to_remove = []
+                for tp, val in list(h_dict.items()):
+                    pub_pos = val.pub_pos
+                    is_f = val.is_fakeout
+                    if pub_pos == (cr2, cc3) or tp == (cr2, cc3):
+                         if is_f:
+                             ghost_type = 'fakeout'
+                         from chess_logic import deactivate_plies
+                         deactivate_plies(gs, val.plies)
+                         if is_f:
+                             to_remove.append(tp)
+                for tp in to_remove:
+                    h_dict.pop(tp, None)
+            
+            from chess_logic import alg
+            if ghost_type == 'fakeout':
+                gs['log'].append(f"SYS_FAKEOUT|Peça desapareceu em {alg(cc3, cr2)}!")
+            else:
+                gs['log'].append(f"SYS_HIDDEN|Peça desapareceu em {alg(cc3, cr2)}!")
+            if 'reveal_flashes' not in gs:
+                gs['reveal_flashes'] = []
+            gs['reveal_flashes'].append([cr2, cc3, ghost_type])
+        elif kind == 'dst':
+            enemy_hid = gs['hidden_b'] if gs['turn'] == 'w' else gs['hidden_w']
+            val = enemy_hid.pop((cr2, cc3), None)
+            if val:
+                pub_pos, hp = val.pub_pos, val.piece
+                is_f = val.is_fakeout
+                if pub_pos: gs['board'][pub_pos[0]][pub_pos[1]] = None
+                gs['board'][cr2][cc3] = hp
+                enemy_cap = gs['captured_w'] if gs['turn'] == 'w' else gs['captured_b']
+                enemy_cap.discard((cr2, cc3))
+                
+                from chess_logic import alg, deactivate_plies, _register_revealed_trail
+                if is_f:
+                    gs['log'].append(f"SYS_FAKEOUT|Peça revelada em {alg(cc3, cr2)}!")
+                else:
+                    gs['log'].append(f"SYS_HIDDEN|Peça revelada em {alg(cc3, cr2)}!")
+                
+                deactivate_plies(gs, val.plies)
+                _register_revealed_trail(gs, val)
+                if 'reveal_flashes' not in gs:
+                    gs['reveal_flashes'] = []
+                gs['reveal_flashes'].append([cr2, cc3, 'fakeout' if is_f else 'hidden'])
+        
+        if gs.get('reveal_flashes'):
+            for rf in gs['reveal_flashes']:
+                rr, rc = rf[0], rf[1]
+                rtype = rf[2] if len(rf) > 2 else 'hidden'
+                col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
+                trigger_square_flash(client_state, rr, rc, col, rtype)
+            gs['reveal_flashes'] = []
+        
+        client_state['selected'] = None
+        client_state['legal_sq'] = []
+        client_state['visual_legal_sq'] = []
+    else:
+        import json
+        await websocket.send(json.dumps(
+            {"type": "action", "action": "conflict_resolve",
+             "conflict": conflict}))
+        client_state['selected'] = None
+        client_state['legal_sq'] = []
+        client_state['visual_legal_sq'] = []
+
+
+
         return gs
 
+async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, screen, fonts):
     # drag_piece_sq is the clicked square (might be pub_pos)
     # selected is the true square resolved by get_ui_selection
     dsr, dsc = client_state['drag_piece_sq']
@@ -2341,6 +2420,12 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                         has_captured_piece_on_square = gs['board'][r][c] is not None
                         
                     is_fakeout = gs.get('fakeout_active', False)
+                    conflict = check_conflict(gs, sr, sc, r, c)
+                    if conflict:
+                        await resolve_client_conflict(gs, client_state, conflict, websocket, is_local)
+                        client_state['is_dragging_gesture'] = False
+                        return gs
+
                     if (r, c) not in legal(gs, sr, sc):
                         play_sound('error')
                         trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
@@ -2430,6 +2515,12 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     client_state['legal_sq'] = []; client_state['visual_legal_sq'] = []
                     gs['hidden_mode'] = False
                 else:
+                    conflict = check_conflict(gs, sr, sc, r, c)
+                    if conflict:
+                        await resolve_client_conflict(gs, client_state, conflict, websocket, is_local)
+                        client_state['is_dragging_gesture'] = False
+                        return gs
+
                     move_cmd = {
                         "type": "action", "action": "move",
                         "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo, "gesture_hidden": is_hidden_move
@@ -2806,15 +2897,103 @@ async def game_loop():
                 p['y'] += p['vy'] * dt
                 p['life'] -= dt
             client_state['particles'] = [p for p in client_state['particles'] if p['life'] > 0]
+        mouse = pygame.mouse.get_pos()
+        if client_state.get('is_dragging_gesture'):
+            old_mx, old_my = client_state.get('drag_pos', mouse)
+            client_state['drag_pos'] = mouse
+            if dt > 0:
+                vx = (mouse[0] - old_mx) / dt
+                vy = (mouse[1] - old_my) / dt
+                old_vx, old_vy = client_state.get('drag_vel', (0.0, 0.0))
+                alpha = 15.0 * dt
+                if alpha > 1.0: alpha = 1.0
+                client_state['drag_vel'] = (old_vx * (1 - alpha) + vx * alpha, old_vy * (1 - alpha) + vy * alpha)
+        else:
+            client_state['drag_vel'] = (0.0, 0.0)
+
         for fname in ['flames', 'flames_back', 'intro_flames', 'menu_flames']:
             if client_state.get(fname):
                 for f in client_state[fname]:
-                    xvel = math.sin(pygame.time.get_ticks() * 0.010 + f['y']) * f['radius'] * 0.2
-                    f['x'] += xvel * dt * 60
-                    f['x'] += f['drift_x'] * dt
-                    f['y'] -= f['vy'] * dt
-                    f['y'] += f['drift_y'] * dt
-                    f['radius'] -= 1.2 * dt
+                    xvel = math.sin(pygame.time.get_ticks() * 0.0175 + f['y']) * f['radius'] * 0.2
+                    f['x'] += xvel * dt * 60 * 1.75
+                    f['x'] += f['drift_x'] * dt * 1.75
+                    f['y'] -= f['vy'] * dt * 1.75
+                    f['y'] += f['drift_y'] * dt * 1.75
+                    
+                    shrink = 1.2 * 1.75
+                    if fname in ['flames', 'flames_back']:
+                        drag_vel = client_state.get('drag_vel', (0.0, 0.0))
+                        drag_speed = math.hypot(drag_vel[0], drag_vel[1])
+                        shrink += drag_speed * 0.006 * 1.75
+                    f['radius'] -= shrink * dt
+
+                    if fname in ['flames', 'flames_back']:
+                        if 'push_x' not in f:
+                            f['push_x'] = 0.0
+                            f['push_y'] = 0.0
+                        is_dragging = client_state.get('is_dragging_gesture', False)
+                        drag_pos = client_state.get('drag_pos')
+                        if is_dragging and drag_pos:
+                            mx, my = drag_pos
+                            cur_px = f['x'] + f['push_x']
+                            cur_py = f['y'] + f['push_y']
+                            dx = cur_px - mx
+                            dy = cur_py - my
+                            dist = math.hypot(dx, dy)
+                            if dist < 120:
+                                factor = max(0.0, 1.0 - (dist / 120.0))
+                                if dist > 0.1:
+                                    target_ox = (dx / dist) * 4.0 * factor
+                                    target_oy = (dy / dist) * 4.0 * factor
+                                else:
+                                    target_ox = 4.0 * factor
+                                    target_oy = 0.0
+                                f['push_x'] += (target_ox - f['push_x']) * min(1.0, dt * 15.0)
+                                f['push_y'] += (target_oy - f['push_y']) * min(1.0, dt * 15.0)
+                                push_mag = math.hypot(f['push_x'], f['push_y'])
+                                if push_mag > 4.0:
+                                    f['push_x'] = (f['push_x'] / push_mag) * 4.0
+                                    f['push_y'] = (f['push_y'] / push_mag) * 4.0
+                            else:
+                                f['push_x'] *= max(0.0, 1.0 - dt * 10.0)
+                                f['push_y'] *= max(0.0, 1.0 - dt * 10.0)
+                        else:
+                            f['push_x'] *= max(0.0, 1.0 - dt * 8.0)
+                            f['push_y'] *= max(0.0, 1.0 - dt * 8.0)
+
+                    elif fname == 'menu_flames':
+                        if 'push_x' not in f:
+                            f['push_x'] = 0.0
+                            f['push_y'] = 0.0
+                        is_dragging = client_state.get('is_dragging_menu', False)
+                        drag_pos = client_state.get('menu_drag_pos')
+                        if is_dragging and drag_pos:
+                            mx, my = drag_pos
+                            cur_px = f['x'] + f['push_x']
+                            cur_py = f['y'] + f['push_y']
+                            dx = cur_px - mx
+                            dy = cur_py - my
+                            dist = math.hypot(dx, dy)
+                            if dist < 120:
+                                factor = max(0.0, 1.0 - (dist / 120.0))
+                                if dist > 0.1:
+                                    target_ox = (dx / dist) * 35.0 * factor
+                                    target_oy = (dy / dist) * 35.0 * factor
+                                else:
+                                    target_ox = 35.0 * factor
+                                    target_oy = 0.0
+                                f['push_x'] += (target_ox - f['push_x']) * min(1.0, dt * 15.0)
+                                f['push_y'] += (target_oy - f['push_y']) * min(1.0, dt * 15.0)
+                                push_mag = math.hypot(f['push_x'], f['push_y'])
+                                if push_mag > 35.0:
+                                    f['push_x'] = (f['push_x'] / push_mag) * 35.0
+                                    f['push_y'] = (f['push_y'] / push_mag) * 35.0
+                            else:
+                                f['push_x'] *= max(0.0, 1.0 - dt * 10.0)
+                                f['push_y'] *= max(0.0, 1.0 - dt * 10.0)
+                        else:
+                            f['push_x'] *= max(0.0, 1.0 - dt * 8.0)
+                            f['push_y'] *= max(0.0, 1.0 - dt * 8.0)
                 client_state[fname] = [f for f in client_state[fname] if f['radius'] > 0.1]
 
 
@@ -2836,31 +3015,22 @@ async def game_loop():
 
         mouse = pygame.mouse.get_pos()
         if client_state.get('is_dragging_gesture'):
-            old_mx, old_my = client_state.get('drag_pos', mouse)
-            client_state['drag_pos'] = mouse
-            if dt > 0:
-                vx = (mouse[0] - old_mx) / dt
-                vy = (mouse[1] - old_my) / dt
-                old_vx, old_vy = client_state.get('drag_vel', (0.0, 0.0))
-                alpha = 15.0 * dt
-                if alpha > 1.0: alpha = 1.0
-                client_state['drag_vel'] = (old_vx * (1 - alpha) + vx * alpha, old_vy * (1 - alpha) + vy * alpha)
-                
-                is_hid_triggered = client_state.get('hidden_triggered', False)
-                is_fake_triggered = client_state.get('fakeout_triggered', False)
-                is_already_hid = gs.get('hidden_mode', False) or (client_state.get('drafting') and client_state.get('draft_hidden'))
-                is_already_fake = gs.get('fakeout_active', False) or (client_state.get('drafting') and client_state.get('draft_fakeout'))
-                
-                is_hid = is_hid_triggered or is_already_hid
-                is_fake = is_fake_triggered or is_already_fake
-                if is_hid or is_fake:
-                    if 'flames' not in client_state:
-                        client_state['flames'] = []
-                        client_state['flames_back'] = []
-                    for _ in range(2):
-                        if random.random() < 0.7:
-                            px, py = client_state.get('drag_piece_center', (mouse[0], mouse[1] - 35))
-                            client_state['flames'].append({
+            vx, vy = client_state.get('drag_vel', (0.0, 0.0))
+            is_hid_triggered = client_state.get('hidden_triggered', False)
+            is_fake_triggered = client_state.get('fakeout_triggered', False)
+            is_already_hid = gs.get('hidden_mode', False) or (client_state.get('drafting') and client_state.get('draft_hidden'))
+            is_already_fake = gs.get('fakeout_active', False) or (client_state.get('drafting') and client_state.get('draft_fakeout'))
+            
+            is_hid = is_hid_triggered or is_already_hid
+            is_fake = is_fake_triggered or is_already_fake
+            if is_hid or is_fake:
+                if 'flames' not in client_state:
+                    client_state['flames'] = []
+                    client_state['flames_back'] = []
+                for _ in range(2):
+                    if random.random() < 0.7:
+                        px, py = client_state.get('drag_piece_center', (mouse[0], mouse[1] - 35))
+                        client_state['flames'].append({
                             'x': px + random.randint(-15, 15),
                             'y': py + random.randint(-15, 15),
                             'radius': float(random.randint(3, 7)),
@@ -3154,6 +3324,8 @@ async def game_loop():
             if app_state == "MENU":
                 if ev.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = ev.pos
+                    client_state['is_dragging_menu'] = True
+                    client_state['menu_drag_pos'] = (mx, my)
                     if btn_create.collidepoint((mx, my)):
                         play_sound('click')
                         app_state = "CONNECTING"
@@ -3205,6 +3377,12 @@ async def game_loop():
                         play_sound('error')
                         error_msg = "Em desenvolvimento..."
                         app_state = "MENU"
+
+                elif ev.type == pygame.MOUSEMOTION:
+                    if client_state.get('is_dragging_menu'):
+                        client_state['menu_drag_pos'] = ev.pos
+                elif ev.type == pygame.MOUSEBUTTONUP:
+                    client_state['is_dragging_menu'] = False
 
             elif app_state == "JOINING":
                 if ev.type == pygame.TEXTINPUT and len(input_text) < 4:
@@ -3594,9 +3772,17 @@ async def game_loop():
                                             next_a = get_next_turn_from_queue(gs, gs['turn'])
                                             if next_a:
                                                 if compare_turns(gs.get('current_turn_actions', []), next_a):
-                                                    gs['pts'][gs['turn']] = round(gs['pts'][gs['turn']] + 1, 2)
+                                                    if not isinstance(gs.get('draft_seq'), dict):
+                                                        gs['draft_seq'] = {'w': 0, 'b': 0}
+                                                    seq = gs['draft_seq'].get(gs['turn'], 0)
+                                                    reward = 2 ** seq
+                                                    gs['draft_seq'][gs['turn']] = seq + 1
+                                                    gs['pts'][gs['turn']] = round(gs['pts'][gs['turn']] + reward, 2)
                                                 else:
+                                                    if not isinstance(gs.get('draft_seq'), dict):
+                                                        gs['draft_seq'] = {'w': 0, 'b': 0}
                                                     gs['pts'][gs['turn']] = round(gs['pts'][gs['turn']] - 1, 2)
+                                                    gs['draft_seq'][gs['turn']] = 0
                                                 pop_next_turn_from_queue(gs, gs['turn'])
 
                                             if dm_copy and dm:
@@ -3878,71 +4064,7 @@ async def game_loop():
 
                                 conflict = check_conflict(gs, sr, sc, r, c)
                                 if conflict:
-                                    if is_local:
-                                        kind, cr2, cc3 = conflict
-                                        if kind == 'src':
-                                            gs['board'][cr2][cc3] = None
-                                            my_cap = gs['captured_w'] if gs['turn'] == 'w' else gs['captured_b']
-                                            my_cap.discard((cr2, cc3))
-                                            ghost_type = 'hidden'
-                                            
-                                            for h_dict in [gs.get('hidden_w', {}), gs.get('hidden_b', {})]:
-                                                to_remove = []
-                                                for tp, val in list(h_dict.items()):
-                                                    pub_pos = val.pub_pos
-                                                    is_f = val.is_fakeout
-                                                    if pub_pos == (cr2, cc3) or tp == (cr2, cc3):
-                                                         if is_f:
-                                                             ghost_type = 'fakeout'
-                                                         deactivate_plies(gs, val.plies)
-                                                         if is_f:
-                                                             to_remove.append(tp)
-                                                for tp in to_remove:
-                                                    h_dict.pop(tp, None)
-                                            if ghost_type == 'fakeout':
-                                                gs['log'].append(f"SYS_FAKEOUT|Peça desapareceu em {alg(cc3, cr2)}!")
-                                            else:
-                                                gs['log'].append(f"SYS_HIDDEN|Peça desapareceu em {alg(cc3, cr2)}!")
-                                            if 'reveal_flashes' not in gs:
-                                                gs['reveal_flashes'] = []
-                                            gs['reveal_flashes'].append([cr2, cc3, ghost_type])
-                                        elif kind == 'dst':
-                                            enemy_hid = gs['hidden_b'] if gs['turn'] == 'w' else gs['hidden_w']
-                                            val = enemy_hid.pop((cr2, cc3), None)
-                                            if val:
-                                                pub_pos, hp = val.pub_pos, val.piece
-                                                is_f = val.is_fakeout
-                                                if pub_pos: gs['board'][pub_pos[0]][pub_pos[1]] = None
-                                                gs['board'][cr2][cc3] = hp
-                                                enemy_cap = gs['captured_w'] if gs['turn'] == 'w' else gs['captured_b']
-                                                enemy_cap.discard((cr2, cc3))
-                                                if is_f:
-                                                    gs['log'].append(f"SYS_FAKEOUT|Peça revelada em {alg(cc3, cr2)}!")
-                                                else:
-                                                    gs['log'].append(f"SYS_HIDDEN|Peça revelada em {alg(cc3, cr2)}!")
-                                                
-                                                deactivate_plies(gs, val.plies)
-                                                _register_revealed_trail(gs, val)
-                                                if 'reveal_flashes' not in gs:
-                                                    gs['reveal_flashes'] = []
-                                                gs['reveal_flashes'].append([cr2, cc3, 'fakeout' if is_f else 'hidden'])
-                                        
-                                        if gs.get('reveal_flashes'):
-                                            for rf in gs['reveal_flashes']:
-                                                rr, rc = rf[0], rf[1]
-                                                rtype = rf[2] if len(rf) > 2 else 'hidden'
-                                                col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
-                                                trigger_square_flash(client_state, rr, rc, col, rtype)
-                                            gs['reveal_flashes'] = []
-                                        
-                                        client_state['selected'] = None
-                                        client_state['legal_sq'] = []; client_state['visual_legal_sq'] = []
-                                    else:
-                                        await websocket.send(json.dumps(
-                                            {"type": "action", "action": "conflict_resolve",
-                                             "conflict": conflict}))
-                                        client_state['selected'] = None
-                                        client_state['legal_sq'] = []; client_state['visual_legal_sq'] = []
+                                    await resolve_client_conflict(gs, client_state, conflict, websocket, is_local)
                                 else:
                                     promo = None
                                     p = tb[sr][sc]
@@ -4135,10 +4257,7 @@ async def game_loop():
                                 else:
                                     # client_state['selected'] = None
                                     # client_state['legal_sq'] = []; client_state['visual_legal_sq'] = []
-                                    if gs.get('fakeout_active') or client_state.get('draft_fakeout'):
-                                        await MechanicsManager.execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound, None)
-                                    elif gs.get('hidden_mode') or client_state.get('draft_hidden'):
-                                        await MechanicsManager.execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound, None)
+                                    pass
                         else:
                             gs_temp = copy.copy(gs)
                             gs_temp['drafting_active'] = client_state.get('drafting', False)
@@ -4170,16 +4289,16 @@ async def game_loop():
                 p_str = 'wP'
                 img = IMAGES.get(p_str)
                 if img:
-                    base_img = pygame.transform.smoothscale(img, (SQ, SQ))
+                    base_img = pygame.transform.smoothscale(img, (int(SQ * 1.5), int(SQ * 1.5)))
                 else:
-                    base_img = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                    base_img = pygame.Surface((int(SQ * 1.5), int(SQ * 1.5)), pygame.SRCALPHA)
                     t_surf = fonts['piece'].render(GLYPHS[p_str], True, (255, 255, 255))
-                    base_img.blit(t_surf, t_surf.get_rect(center=(SQ//2, SQ//2)))
+                    base_img.blit(t_surf, t_surf.get_rect(center=(int(SQ * 1.5)//2, int(SQ * 1.5)//2)))
     
                 if t_ms < 1500:
                     p = t_ms / 1500.0
                     alpha = int(255 * p)
-                    scale = 1.3 - 0.3 * p
+                    scale = (1.3 - 0.3 * p) * 1.5
                     size = int(SQ * scale)
                     s_img = pygame.transform.smoothscale(base_img, (size, size))
                     s_img.set_alpha(alpha)
@@ -4189,21 +4308,21 @@ async def game_loop():
                     if 'intro_flames' not in client_state: client_state['intro_flames'] = []
                     if random.random() < 0.42:
                         client_state['intro_flames'].append({
-                            'x': cx + random.randint(-15, 15),
-                            'y': current_y + random.randint(-15, 15),
+                            'x': cx + random.randint(-22, 22),
+                            'y': current_y + random.randint(-22, 22),
                             'radius': float(random.randint(3, 7)),
                             'vy': random.uniform(30.0, 80.0),
                             'drift_x': 0.0, 'drift_y': 0.0, 'type': 'hidden'
                         })
                     draw_flames_list(screen, client_state['intro_flames'])
                     
-                    s_img = pygame.transform.smoothscale(base_img, (SQ, SQ))
+                    s_img = pygame.transform.smoothscale(base_img, (int(SQ * 1.5), int(SQ * 1.5)))
                     screen.blit(s_img, s_img.get_rect(center=(cx, cy)))
                     
-                    bar_w = 80
-                    bar_h = 2
+                    bar_w = int(80 * 1.5)
+                    bar_h = int(2 * 1.5)
                     bx = cx - bar_w // 2
-                    by = cy + SQ // 2 + 10
+                    by = cy + int(SQ * 1.5) // 2 + 15
                     p_bar = (t_ms - 1500) / 5000.0
                     draw_rect_aa(screen, (30, 30, 35), pygame.Rect(bx, by, bar_w, bar_h))
                     draw_rect_aa(screen, (240, 240, 245), pygame.Rect(bx, by, int(bar_w * p_bar), bar_h))
@@ -4227,8 +4346,8 @@ async def game_loop():
                     spawn_chance = 0.42 * (1.0 - progress)
                     if random.random() < spawn_chance:
                         client_state['intro_flames'].append({
-                            'x': cx + random.randint(-15, 15),
-                            'y': current_y + random.randint(-15, 15),
+                            'x': cx + random.randint(-22, 22),
+                            'y': current_y + random.randint(-22, 22),
                             'radius': float(random.randint(3, 7)) * max(0.1, (1.0 - progress)),
                             'vy': random.uniform(30.0, 80.0),
                             'drift_x': 0.0, 'drift_y': 0.0, 'type': 'hidden'
@@ -4239,7 +4358,7 @@ async def game_loop():
                         
                     draw_flames_list(screen, client_state['intro_flames'])
                     
-                    s_img = pygame.transform.smoothscale(base_img, (SQ, SQ))
+                    s_img = pygame.transform.smoothscale(base_img, (int(SQ * 1.5), int(SQ * 1.5)))
                     s_img.set_alpha(alpha)
                     screen.blit(s_img, s_img.get_rect(center=(cx, current_y)))
                 elif t_ms < 8300:
@@ -4294,8 +4413,8 @@ async def game_loop():
                     if 'menu_flames' not in client_state: client_state['menu_flames'] = []
                     if random.random() < 0.42:
                         client_state['menu_flames'].append({
-                            'x': cx + random.randint(-15, 15),
-                            'y': current_y + random.randint(-15, 15),
+                            'x': cx + random.randint(-22, 22),
+                            'y': current_y + random.randint(-22, 22),
                             'radius': float(random.randint(3, 7)),
                             'vy': random.uniform(30.0, 80.0),
                             'drift_x': 0.0, 'drift_y': 0.0, 'type': 'fakeout'
@@ -4313,7 +4432,7 @@ async def game_loop():
                     screen.blit(psurf, (int(p['x'] - size), int(p['y'] - size)))
 
             draw_text_center(screen, "Hidden Chess", title_font, T_MAIN, menu_y_start - 80)
-            draw_text_center(screen, "v1.5.402", fonts['small'], T_DIM, menu_y_start - 40)
+            draw_text_center(screen, "v1.5.403", fonts['small'], T_DIM, menu_y_start - 40)
             
             draw_fancy_btn(screen, "Criar Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_create, is_hover=btn_create.collidepoint(mouse))
             draw_fancy_btn(screen, "Entrar no Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_join, is_hover=btn_join.collidepoint(mouse))

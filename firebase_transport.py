@@ -163,9 +163,17 @@ class MockWebsocket:
                             self.recorder.record('next_queue_check', room_code=self.room_code, has_next=bool(next_a), current_actions=len(gs.get('current_turn_actions', []) or []))
                             if next_a:
                                 if compare_turns(gs.get('current_turn_actions', []), next_a):
-                                    gs['pts'][color] = round(gs['pts'][color] + 1, 2)
+                                    if not isinstance(gs.get('draft_seq'), dict):
+                                        gs['draft_seq'] = {'w': 0, 'b': 0}
+                                    seq = gs['draft_seq'].get(color, 0)
+                                    reward = 2 ** seq
+                                    gs['draft_seq'][color] = seq + 1
+                                    gs['pts'][color] = round(gs['pts'][color] + reward, 2)
                                 else:
+                                    if not isinstance(gs.get('draft_seq'), dict):
+                                        gs['draft_seq'] = {'w': 0, 'b': 0}
                                     gs['pts'][color] = round(gs['pts'][color] - 1, 2)
+                                    gs['draft_seq'][color] = 0
                                 pop_next_turn_from_queue(gs, color)
 
                             if dm:
@@ -286,21 +294,79 @@ class MockWebsocket:
                                 if gs.get('hidden_mode') and not can_afford(gs):
                                     pass
                                 else:
-                                    gesture_hidden = data.get('gesture_hidden', False)
-                                    is_hidden = gs.get('hidden_mode', False) or gesture_hidden
-                                    is_fakeout = gs.get('fakeout_active', False)
-                                    res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
-                                    if res:
-                                        gs['hidden_mode'] = False
-                                        gs['fakeout_active'] = False
-                                        if 'current_turn_actions' not in gs:
-                                            gs['current_turn_actions'] = []
-                                        gs['current_turn_actions'].append({
-                                            'type': 'move',
-                                            'fr': fr, 'fc': fc, 'tr': tr, 'tc': tc,
-                                            'promo': promo, 'hidden': is_hidden,
-                                            'fakeout': is_fakeout
-                                        })
+                                    from chess_logic import check_conflict
+                                    conflict = check_conflict(gs, fr, fc, tr, tc)
+                                    if conflict:
+                                        # Resolve conflict exactly like the conflict_resolve action
+                                        kind, cr2, cc3 = conflict
+                                        if kind == 'src':
+                                            gs['board'][cr2][cc3] = None
+                                            my_cap = gs['captured_w'] if color == 'w' else gs['captured_b']
+                                            my_cap.discard((cr2, cc3))
+                                            ghost_type = 'hidden'
+                                            for h_dict in [gs.get('hidden_w', {}), gs.get('hidden_b', {})]:
+                                                to_remove = []
+                                                for tp, val in list(h_dict.items()):
+                                                    pub_pos = val.pub_pos if hasattr(val, 'pub_pos') else val[0]
+                                                    is_f = val.is_fakeout if hasattr(val, 'is_fakeout') else (val[3] if len(val) > 3 else False)
+                                                    if pub_pos == (cr2, cc3) or tp == (cr2, cc3):
+                                                        deactivate_plies(gs, val.plies if hasattr(val, 'plies') else (val[5] if len(val) > 5 else []))
+                                                        _register_revealed_trail(gs, val)
+                                                        if is_f:
+                                                            ghost_type = 'fakeout'
+                                                            to_remove.append(tp)
+                                                for tp in to_remove:
+                                                    h_dict.pop(tp, None)
+                                            if ghost_type == 'fakeout':
+                                                gs['log'].append(f"SYS_FAKEOUT|Peça desapareceu em {alg(cc3, cr2)}!")
+                                            else:
+                                                gs['log'].append(f"SYS_HIDDEN|Peça desapareceu em {alg(cc3, cr2)}!")
+                                            if 'reveal_flashes' not in gs:
+                                                gs['reveal_flashes'] = []
+                                            gs['reveal_flashes'].append([cr2, cc3, ghost_type])
+                                        elif kind == 'dst':
+                                            enemy_hid = gs['hidden_b'] if color == 'w' else gs['hidden_w']
+                                            val = enemy_hid.pop((cr2, cc3), None)
+                                            if val:
+                                                if hasattr(val, 'pub_pos'):
+                                                    pub_pos, hp = val.pub_pos, val.piece
+                                                    is_f = val.is_fakeout
+                                                    plies = val.plies
+                                                else:
+                                                    pub_pos, hp = val[0], val[1]
+                                                    is_f = val[3] if len(val) > 3 else False
+                                                    plies = val[5] if len(val) > 5 else []
+                                                if pub_pos: gs['board'][pub_pos[0]][pub_pos[1]] = None
+                                                gs['board'][cr2][cc3] = hp
+                                                enemy_cap = gs['captured_w'] if color == 'w' else gs['captured_b']
+                                                enemy_cap.discard((cr2, cc3))
+                                                deactivate_plies(gs, plies)
+                                                _register_revealed_trail(gs, val)
+                                                if is_f:
+                                                    gs['log'].append(f"SYS_FAKEOUT|Peça revelada em {alg(cc3, cr2)}!")
+                                                else:
+                                                    gs['log'].append(f"SYS_HIDDEN|Peça revelada em {alg(cc3, cr2)}!")
+                                                if 'reveal_flashes' not in gs:
+                                                    gs['reveal_flashes'] = []
+                                                gs['reveal_flashes'].append([cr2, cc3, 'fakeout' if is_f else 'hidden'])
+                                        needs_broadcast = True
+                                        res = False
+                                    else:
+                                        gesture_hidden = data.get('gesture_hidden', False)
+                                        is_hidden = gs.get('hidden_mode', False) or gesture_hidden
+                                        is_fakeout = gs.get('fakeout_active', False)
+                                        res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
+                                        if res:
+                                            gs['hidden_mode'] = False
+                                            gs['fakeout_active'] = False
+                                            if 'current_turn_actions' not in gs:
+                                                gs['current_turn_actions'] = []
+                                            gs['current_turn_actions'].append({
+                                                'type': 'move',
+                                                'fr': fr, 'fc': fc, 'tr': tr, 'tc': tc,
+                                                'promo': promo, 'hidden': is_hidden,
+                                                'fakeout': is_fakeout
+                                            })
                                     needs_broadcast = True
                                     gs['ghost_capture_flash'] = None
                                     gs['ghost_capture_type'] = None
