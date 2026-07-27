@@ -4,7 +4,7 @@ android.presplash_lottie = assets/lottie/hidden_chess_presplash_7s_lottie.json
 android.presplash_color = #000000
 
 # (str) Title of your application
-title = Hidden Chess
+title = HiChess
 
 # (str) Package name
 package.name = hiddenchess
@@ -20,7 +20,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf,json,wav,ogg
 source.include_patterns = assets/themes/**,assets/sounds/**,assets/*.ttf,assets/*.png,assets/*.json,assets/lottie/*.json
 
 # (str) Application versioning
-version = 1.5.403
+version = 1.5.404
 
 # (list) Application requirements
 requirements = python3==3.10.14,hostpython3==3.10.14,pygame,certifi,openssl

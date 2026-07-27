@@ -1,5 +1,5 @@
 {
-  "name": "Hidden Chess",
+  "name": "HiChess",
   "description": "Chess game with hidden moves, fakeouts, action queues, and real-time custom particle effects and vector animations.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

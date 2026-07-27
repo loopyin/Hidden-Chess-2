@@ -140,8 +140,17 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
 
     enemy_hidden = gs['hidden_b'] if c == 'w' else gs['hidden_w']
     for t_pos, h_val in enemy_hidden.items():
-        if h_val.pub_pos == (tr, tc):
+        pub_p = h_val.get('pub_pos') if isinstance(h_val, dict) else getattr(h_val, 'pub_pos', None)
+        if pub_p == (tr, tc):
             return True
+
+    my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
+    allied_fake_positions = set()
+    for t_pos, h_val in my_hidden.items():
+        is_f = h_val.get('is_fakeout', False) if isinstance(h_val, dict) else getattr(h_val, 'is_fakeout', False)
+        pub_p = h_val.get('pub_pos') if isinstance(h_val, dict) else getattr(h_val, 'pub_pos', None)
+        if is_f and pub_p is not None and pub_p != (fr, fc):
+            allied_fake_positions.add(pub_p)
 
     def get_dir(a, b):
         return 0 if a == b else (1 if b > a else -1)
@@ -153,20 +162,20 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
         if tc == 2:
             check_cols.append(1)
         for col in check_cols:
-            if (fr, col) in enemy_hidden:
+            if (fr, col) in enemy_hidden or (fr, col) in allied_fake_positions:
                 return True
     elif t not in ('N', 'K'):
         dr, dc = get_dir(fr, tr), get_dir(fc, tc)
         r, cc = fr + dr, fc + dc
         while 0 <= r < 8 and 0 <= cc < 8:
-            if (r, cc) in enemy_hidden:
+            if (r, cc) in enemy_hidden or (r, cc) in allied_fake_positions:
                 return True
             if (r, cc) == (tr, tc):
                 break
             r += dr
             cc += dc
     else:
-        if (tr, tc) in enemy_hidden:
+        if (tr, tc) in enemy_hidden or (tr, tc) in allied_fake_positions:
             return True
 
     if t == 'P' and fc != tc:
@@ -194,41 +203,45 @@ def legal(gs, row, fc, as_fakeout=False, return_visual=False, ui_selection=False
     if pt(p) == 'K' and (gs.get('hidden_mode') or gs.get('fakeout_active') or as_fakeout):
         return (res, res) if return_visual else res
 
-    if (gs.get('fakeout_active') or as_fakeout) and (row, fc) in my_hidden:
-        val = my_hidden[(row, fc)]
-        pub_pos = val.pub_pos
-        if pub_pos:
-            fake_tb = cpb(tb)
-            for hr, hc in my_hidden.keys():
-                fake_tb[hr][hc] = None
-            fake_tb[pub_pos[0]][pub_pos[1]] = p
-            
-            fake_abs = cpb(abs_b)
-            fake_abs[pub_pos[0]][pub_pos[1]] = p
+    if gs.get('fakeout_active') or as_fakeout:
+        start_r, start_c = row, fc
+        if (row, fc) in my_hidden:
+            val = my_hidden[(row, fc)]
+            if val.pub_pos:
+                start_r, start_c = val.pub_pos
 
-            for tr, tc in pseudo(fake_tb, fake_abs, pub_pos[0], pub_pos[1], gs['ep'], gs['cr']):
-                if (tr, tc) in my_hidden:
-                    continue
+        fake_tb = cpb(tb)
+        for hr, hc in my_hidden.keys():
+            fake_tb[hr][hc] = None
+        fake_tb[start_r][start_c] = p
 
-                target = fake_abs[tr][tc]
-                if target and pt(target) == 'K': continue
-                visual_target = gs['board'][tr][tc]
-                if visual_target and pc(visual_target) == c: continue
+        fake_abs = cpb(abs_b)
+        fake_abs[start_r][start_c] = p
 
-                if check_fakeout_collision(c, pub_pos[0], pub_pos[1], tr, tc, p, gs):
-                    continue
+        for tr, tc in pseudo(fake_tb, fake_abs, start_r, start_c, gs['ep'], gs['cr']):
+            if (tr, tc) in my_hidden:
+                continue
 
-                nb = cpb(fake_abs)
-                ncr = cpcr(gs['cr'])
-                do_move(nb, pub_pos[0], pub_pos[1], tr, tc, gs['ep'], ncr, 'Q')
-                nb_check = cpb(nb)
-                for hr, hc in my_hidden:
-                    ghost = gs['board'][hr][hc]
-                    if ghost and pc(ghost) == opp(c):
-                        nb_check[hr][hc] = ghost
-                if not in_check(nb_check, c):
-                    res.append((tr, tc))
-            return (res, res) if return_visual else res
+            target = fake_abs[tr][tc]
+            if target and pt(target) == 'K': continue
+            visual_target = gs['board'][tr][tc]
+            if visual_target and pc(visual_target) == c: continue
+            if tb[tr][tc] and pc(tb[tr][tc]) == c: continue
+
+            if check_fakeout_collision(c, start_r, start_c, tr, tc, p, gs):
+                continue
+
+            nb = cpb(fake_abs)
+            ncr = cpcr(gs['cr'])
+            do_move(nb, start_r, start_c, tr, tc, gs['ep'], ncr, 'Q')
+            nb_check = cpb(nb)
+            for hr, hc in my_hidden:
+                ghost = gs['board'][hr][hc]
+                if ghost and pc(ghost) == opp(c):
+                    nb_check[hr][hc] = ghost
+            if not in_check(nb_check, c):
+                res.append((tr, tc))
+        return (res, res) if return_visual else res
 
     normal_pseudo = pseudo(tb, abs_b, row, fc, gs['ep'], gs['cr'])
     pierced_pseudo = []
@@ -439,6 +452,13 @@ def register_predict_move(gs, predictor_color, fr, fc, tr, tc, promo=None, cost=
         'move': (fr, fc, tr, tc, promo),
     }
     gs['last_predict_visible_to'] = predictor_color
+    
+    try:
+        move_str = notation(gs['board'], fr, fc, tr, tc, gs.get('ep'), promo)
+    except Exception:
+        move_str = f"{alg(fc, fr)}->{alg(tc, tr)}"
+    
+    gs['log'].append(f"PREDICT|{move_str}|{predictor_color}")
     return True
 
 def resolve_pending_prediction(gs, mover_color, actual_move):
@@ -825,12 +845,10 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
     if (tr, tc) in frozen:
         frozen.remove((tr, tc))
         gs['pts'][c] = round(gs['pts'][c] - val, 2)
-        gs['log'].append(f"ICE|{c}| O rei descongelou {alg(tc, tr)} (-{val}pt)")
         res = 'unfrozen'
     else:
         frozen.add((tr, tc))
         gs['pts'][c] = round(gs['pts'][c] + val, 2)
-        gs['log'].append(f"ICE|{c}| O rei congelou {alg(tc, tr)} (+{val}pt)")
         res = 'frozen'
         
     gs['fakeout_active'] = False
@@ -1312,6 +1330,7 @@ def serialize_state(gs, player_color=None, dgs=None):
     for idx, entry in enumerate(gs['log']):
         if isinstance(entry, dict):
             classified_entries.append({
+                'original': entry,
                 'type': entry.get('type', 'SYSTEM'),
                 'color': 'system',
                 'text': entry.get('text', ''),
@@ -1348,6 +1367,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             if "Lance inválido. Turno manual iniciado." in note:
                 if color == player_color:
                     classified_entries.append({
+                'original': entry,
                         'type': 'NEXT_CANCELLED',
                         'color': color,
                         'text': note,
@@ -1357,6 +1377,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             elif color == player_color:
                 txt = f"{note} (-{cost}pt)"
                 classified_entries.append({
+                'original': entry,
                     'type': 'HIDDEN',
                     'color': color,
                     'text': txt,
@@ -1366,6 +1387,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             elif not is_active or gs.get('game_over', False):
                 txt = f"{note}"
                 classified_entries.append({
+                'original': entry,
                     'type': 'HIDDEN',
                     'color': color,
                     'text': txt,
@@ -1378,6 +1400,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             if "Lance inválido. Turno manual iniciado." in note:
                 if color == player_color:
                     classified_entries.append({
+                'original': entry,
                         'type': 'NEXT_CANCELLED',
                         'color': color,
                         'text': note,
@@ -1387,6 +1410,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             elif color == player_color:
                 txt = f"{note} (-{cost}pt)"
                 classified_entries.append({
+                'original': entry,
                     'type': 'FAKEOUT',
                     'color': color,
                     'text': txt,
@@ -1399,6 +1423,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                     normal_moves_count += 1
                     txt = f"{normal_moves_count}. {display_note}"
                     classified_entries.append({
+                'original': entry,
                         'type': 'FAKEOUT',
                         'color': color,
                         'text': txt,
@@ -1409,6 +1434,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                 else:
                     txt = f"    {display_note}"
                     classified_entries.append({
+                'original': entry,
                         'type': 'FAKEOUT',
                         'color': color,
                         'text': txt,
@@ -1420,6 +1446,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             if color == player_color:
                 txt = f"{note}"
                 classified_entries.append({
+                'original': entry,
                     'type': 'PRIVATE_SYS',
                     'color': color,
                     'text': txt,
@@ -1429,6 +1456,7 @@ def serialize_state(gs, player_color=None, dgs=None):
         elif parts[0] == 'SYS_HIDDEN':
             txt = parts[1]
             classified_entries.append({
+                'original': entry,
                 'type': 'SYS_HIDDEN',
                 'color': player_color,
                 'text': txt,
@@ -1438,6 +1466,7 @@ def serialize_state(gs, player_color=None, dgs=None):
         elif parts[0] == 'SYS_FAKEOUT':
             txt = parts[1]
             classified_entries.append({
+                'original': entry,
                 'type': 'SYS_FAKEOUT',
                 'color': player_color,
                 'text': txt,
@@ -1448,6 +1477,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             color, note = parts[1], parts[2]
             if "Lance inválido. Turno manual iniciado." in note:
                 classified_entries.append({
+                'original': entry,
                     'type': 'NEXT_CANCELLED',
                     'color': color,
                     'text': note,
@@ -1459,6 +1489,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                     normal_moves_count += 1
                     txt = f"{normal_moves_count}. {note}"
                     classified_entries.append({
+                'original': entry,
                         'type': 'NORMAL',
                         'color': color,
                         'text': txt,
@@ -1469,6 +1500,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                 else:
                     txt = f"    {note}"
                     classified_entries.append({
+                'original': entry,
                         'type': 'NORMAL',
                         'color': color,
                         'text': txt,
@@ -1477,16 +1509,21 @@ def serialize_state(gs, player_color=None, dgs=None):
                     })
         elif parts[0] == 'NEXT':
             color, note = parts[1], parts[2]
-            classified_entries.append({
-                'type': 'NEXT',
-                'color': color,
-                'text': note,
-                'color_type': 'next',
-                'drafted_turn': drafted_turn
-            })
+            if player_color not in ('server', color) and not gs.get('game_over', False):
+                pass
+            else:
+                classified_entries.append({
+                'original': entry,
+                    'type': 'NEXT',
+                    'color': color,
+                    'text': note,
+                    'color_type': 'draft_normal',
+                    'drafted_turn': drafted_turn
+                })
         elif parts[0] == 'ICE':
             color, note = parts[1], parts[2]
             classified_entries.append({
+                'original': entry,
                 'type': 'ICE',
                 'color': color,
                 'text': note,
@@ -1498,7 +1535,9 @@ def serialize_state(gs, player_color=None, dgs=None):
             predictor_color = parts[2] if len(parts) > 2 else player_color
             if player_color not in ('server', predictor_color):
                 continue
+
             classified_entries.append({
+                'original': entry,
                 'type': 'PREDICT',
                 'color': predictor_color,
                 'text': txt,
@@ -1510,6 +1549,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             if classified_entries:
                 last_c = classified_entries[-1]['color']
             classified_entries.append({
+                'original': entry,
                 'type': 'SYSTEM',
                 'color': last_c,
                 'text': entry,
@@ -1517,7 +1557,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                 'drafted_turn': drafted_turn
             })
 
-    filtered_log = [e['text'] for e in classified_entries]
+    filtered_log = [e.get('original', e['text']) for e in classified_entries]
 
     turns = []
     current_turn = None

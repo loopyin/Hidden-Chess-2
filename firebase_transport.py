@@ -122,7 +122,7 @@ class MockWebsocket:
                     needs_broadcast = True
                 elif action == 'rematch_accept':
                     new_state = make_state()
-                    new_state['created_at'] = gs.get('created_at', time.time())
+                    new_state['created_at'] = time.time()
                     new_state['tokens'] = gs.get('tokens', {})
                     new_state['online'] = gs.get('online', {'w': True, 'b': True})
                     new_state['opponent_joined'] = True
@@ -179,20 +179,14 @@ class MockWebsocket:
                             if dm:
                                 gs[q_key] = dm
                                 for m in dm:
-                                    if m.get('type') == 'move':
-                                        htxt = "[Fakeout] " if m.get('fakeout') else "[Sombra] " if m.get('hidden') else ""
-                                        note_msg = f"{htxt}{alg(m['fc'], m['fr'])} -> {alg(m['tc'], m['tr'])}"
-                                        gs['log'].append(f"NEXT|{color}|{note_msg}")
+                                    pass
 
                             end_turn(gs)
                         else:
                             if dm:
                                 gs[q_key] = dm
                                 for m in dm:
-                                    if m.get('type') == 'move':
-                                        htxt = "[Fakeout] " if m.get('fakeout') else "[Sombra] " if m.get('hidden') else ""
-                                        note_msg = f"{htxt}{alg(m['fc'], m['fr'])} -> {alg(m['tc'], m['tr'])}"
-                                        gs['log'].append(f"NEXT|{color}|{note_msg}")
+                                    pass
 
                             if gs.get(q_key):
                                 process_next_queues(gs)
@@ -211,7 +205,7 @@ class MockWebsocket:
                     elif action == 'toggle_hidden':
                         if not gs['game_over']:
                             if not gs['normal_done']:
-                                if gs['turn_count'] > 1 and can_afford(gs):
+                                if can_afford(gs):
                                     gs['hidden_mode'] = not gs.get('hidden_mode', False)
                                     if gs.get('hidden_mode'):
                                         gs['fakeout_active'] = False
@@ -380,7 +374,7 @@ class MockWebsocket:
                     elif action == 'confirm_draft':
                         if gs.get('locked_for_draft'):
                             gs['locked_for_draft'] = False
-                            process_next_queues(gs, max_moves=1)
+                            process_next_queues(gs)
                             needs_broadcast = True
 
                     elif action == 'predict_move':
@@ -442,7 +436,8 @@ class MockWebsocket:
                     new_tc = new_gs.get('turn_count', 0)
                     old_log_len = len(self.gs.get('log', []))
                     new_log_len = len(new_gs.get('log', []))
-                    if new_tc < old_tc or (new_tc == old_tc and new_log_len < old_log_len):
+                    is_rematch = (self.gs.get('game_over') and not new_gs.get('game_over')) or (new_gs.get('created_at', 0) > self.gs.get('created_at', 0))
+                    if not is_rematch and (new_tc < old_tc or (new_tc == old_tc and new_log_len < old_log_len)):
                         # Stale state from polling, ignore
                         return
 

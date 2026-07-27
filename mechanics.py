@@ -134,10 +134,9 @@ class MechanicsManager:
             if client_state['draft_hidden']:
                 client_state['draft_fakeout'] = False
         else:
-            if is_local:
-                gs['hidden_mode'] = not gs.get('hidden_mode', False)
-                if gs.get('hidden_mode'):
-                    gs['fakeout_active'] = False
+            gs['hidden_mode'] = not gs.get('hidden_mode', False)
+            if gs.get('hidden_mode'):
+                gs['fakeout_active'] = False
                     
         if (is_now_hidden or force_shockwave) and click_pos:
             if 'shockwaves' not in client_state: client_state['shockwaves'] = []
@@ -179,10 +178,9 @@ class MechanicsManager:
             if client_state['draft_fakeout']:
                 client_state['draft_hidden'] = False
         else:
-            if is_local:
-                gs['fakeout_active'] = not gs.get('fakeout_active', False)
-                if gs.get('fakeout_active'):
-                    gs['hidden_mode'] = False
+            gs['fakeout_active'] = not gs.get('fakeout_active', False)
+            if gs.get('fakeout_active'):
+                gs['hidden_mode'] = False
                     
         if (is_now_fakeout or force_shockwave) and click_pos:
             if 'shockwaves' not in client_state: client_state['shockwaves'] = []

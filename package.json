@@ -1,10 +1,10 @@
 {
   "name": "shadow-chess",
-  "version": "1.5.403",
-  "description": "Hidden Chess WebSocket server",
+  "version": "1.5.404",
+  "description": "HiChess WebSocket server",
   "main": "server.py",
   "scripts": {
-    "build": "echo 'Building Hidden Chess...'",
+    "build": "echo 'Building HiChess...'",
     "start": "npx serve -p 3000 .",
     "lint": "python3 -m compileall ."
   },
