@@ -7,7 +7,7 @@ android.presplash_color = #000000
 title = HiChess
 
 # (str) Package name
-package.name = hiddenchess
+package.name = hichess
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = org.test

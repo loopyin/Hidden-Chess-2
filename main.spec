@@ -27,7 +27,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='HiddenChess',
+    name='HiChess',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
