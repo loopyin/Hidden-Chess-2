@@ -4161,8 +4161,7 @@ async def game_loop():
                                         gs['log'].append({'text': 'Pontuação insuficiente', 'color_type': 'predict'})
                                         trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
                             else:
-                                play_sound('error')
-                                trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                                pass
                                 
                             # client_state['selected'] = None
                             # client_state['legal_sq'] = []; client_state['visual_legal_sq'] = []
