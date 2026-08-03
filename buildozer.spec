@@ -40,6 +40,15 @@ android.accept_sdk_license = True
 # (list) The Android archs to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
 android.archs = arm64-v8a, armeabi-v7a
 
+# (int) Target Android API, should be as high as possible.
+android.api = 33
+
+# (int) Minimum API your APK / AAB will support.
+android.minapi = 21
+
+# (int) Android NDK API to use. This is the minimum API supported by the NDK.
+android.ndk_api = 21
+
 # (str) python-for-android branch to use
 p4a.branch = develop
 
