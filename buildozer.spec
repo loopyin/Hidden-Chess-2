@@ -41,7 +41,7 @@ android.accept_sdk_license = True
 android.archs = arm64-v8a, armeabi-v7a
 
 # (str) python-for-android branch to use
-p4a.branch = develop
+p4a.branch = master
 
 [buildozer]
 
