@@ -2274,7 +2274,8 @@ async def resolve_client_conflict(gs, client_state, conflict, websocket, is_loca
                 rr, rc = rf[0], rf[1]
                 rtype = rf[2] if len(rf) > 2 else 'hidden'
                 col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
-                trigger_square_flash(client_state, rr, rc, col, rtype)
+                if is_local:
+                    trigger_square_flash(client_state, rr, rc, col, rtype)
             gs['reveal_flashes'] = []
         
         client_state['selected'] = None
@@ -2602,7 +2603,8 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     if res == "ghost_capture":
                         gc_type = gs.get('ghost_capture_type', 'standard')
                         col = (245, 120, 20) if gc_type == 'fakeout' else (60, 110, 220)
-                        trigger_square_flash(client_state, r, c, col, gc_type)
+                        if is_local:
+                            trigger_square_flash(client_state, r, c, col, gc_type)
                         gs['ghost_capture_flash'] = None
                         gs['ghost_capture_type'] = None
 
@@ -2611,7 +2613,8 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                             rr, rc = r_fl[0], r_fl[1]
                             rtype = r_fl[2] if len(r_fl) > 2 else 'hidden'
                             col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
-                            trigger_square_flash(client_state, rr, rc, col, rtype)
+                            if is_local:
+                                trigger_square_flash(client_state, rr, rc, col, rtype)
                         gs['reveal_flashes'] = []
 
                     client_state['selected'] = None
@@ -3358,6 +3361,8 @@ async def game_loop():
                         gctype = new_gs.get('ghost_capture_type')
                         col = (245, 120, 20) if gctype == 'fakeout' else (60, 110, 220)
                         trigger_square_flash(client_state, gr, gc_pos, col, gctype)
+                        new_gs['ghost_capture_flash'] = None
+                        new_gs['ghost_capture_type'] = None
 
                     if new_gs.get('reveal_flashes'):
                         for rf in new_gs['reveal_flashes']:
@@ -3365,6 +3370,7 @@ async def game_loop():
                             rtype = rf[2] if len(rf) > 2 else 'hidden'
                             col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
                             trigger_square_flash(client_state, rr, rc, col, rtype)
+                        new_gs['reveal_flashes'] = []
 
                     if new_gs['turn'] != gs['turn']:
                         client_state['resign_confirm'] = False
@@ -3921,7 +3927,8 @@ async def game_loop():
                                                 rr, rc = rf[0], rf[1]
                                                 rtype = rf[2] if len(rf) > 2 else 'hidden'
                                                 col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
-                                                trigger_square_flash(client_state, rr, rc, col, rtype)
+                                                if is_local:
+                                                    trigger_square_flash(client_state, rr, rc, col, rtype)
                                             gs['reveal_flashes'] = []
                                         gs['hidden_mode'] = False
                                         client_state['turn_start_snapshot'] = copy.deepcopy(gs)
@@ -4333,7 +4340,8 @@ async def game_loop():
                                             if res == "ghost_capture":
                                                 gc_type = gs.get('ghost_capture_type', 'standard')
                                                 col = (245, 120, 20) if gc_type == 'fakeout' else (60, 110, 220)
-                                                trigger_square_flash(client_state, r, c, col, gc_type)
+                                                if is_local:
+                                                    trigger_square_flash(client_state, r, c, col, gc_type)
                                                 gs['ghost_capture_flash'] = None
                                                 gs['ghost_capture_type'] = None
 
@@ -4342,7 +4350,8 @@ async def game_loop():
                                                     rr, rc = r_fl[0], r_fl[1]
                                                     rtype = r_fl[2] if len(r_fl) > 2 else 'hidden'
                                                     col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
-                                                    trigger_square_flash(client_state, rr, rc, col, rtype)
+                                                    if is_local:
+                                                        trigger_square_flash(client_state, rr, rc, col, rtype)
                                                 gs['reveal_flashes'] = []
 
                                             client_state['selected'] = None

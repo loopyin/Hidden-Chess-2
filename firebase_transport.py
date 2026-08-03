@@ -4,12 +4,40 @@ import time
 import copy
 import random
 import string
+import hashlib
 import threading
 from chess_logic import make_state, exec_move, end_turn, legal, serialize_state, can_afford, alg, deactivate_plies, \
     get_next_turn_from_queue, compare_turns, pop_next_turn_from_queue, process_next_queues, ice_king_interaction, register_predict_move, _register_revealed_trail
 from draft_simulator import get_draft_state
 from firebase_db import firebase_client
 from event_recorder import get_recorder
+
+def get_robust_state_hash(gs):
+    """
+    Computes a robust hash of the game state ignoring ephemeral fields and timestamps.
+    """
+    if not gs:
+        return ""
+    core = {
+        "turn": gs.get("turn"),
+        "turn_count": gs.get("turn_count"),
+        "log_len": len(gs.get("log", [])),
+        "pts": gs.get("pts"),
+        "board": gs.get("board"),
+        "hidden_count": gs.get("hidden_count"),
+        "fakeout_count": gs.get("fakeout_count"),
+        "game_over": gs.get("game_over"),
+        "opponent_joined": gs.get("opponent_joined"),
+        "game_started": gs.get("game_started"),
+        "rematch_requested_by": gs.get("rematch_requested_by"),
+        "online": gs.get("online"),
+        "fakeout_mode_enabled": gs.get("fakeout_mode_enabled"),
+        "ice_king_enabled": gs.get("ice_king_enabled"),
+        "score_to_win": gs.get("score_to_win"),
+        "draft_seq": gs.get("draft_seq")
+    }
+    core_str = json.dumps(core, sort_keys=True)
+    return hashlib.md5(core_str.encode('utf-8')).hexdigest()
 
 class MockWebsocket:
     def __init__(self):
@@ -20,6 +48,7 @@ class MockWebsocket:
         self.color = None
         self.token = None
         self.gs = None
+        self.last_handled_hash = None
         
     async def __aiter__(self):
         return self
@@ -197,9 +226,6 @@ class MockWebsocket:
                         clean_snapshot.pop('turn_start_snapshot', None)
                         gs['turn_start_snapshot'] = clean_snapshot
                         needs_broadcast = True
-                        gs['ghost_capture_flash'] = None
-                        gs['ghost_capture_type'] = None
-                        gs['reveal_flashes'] = []
                         self.recorder.snapshot('end_turn_complete', gs, room_code=self.room_code, color=color)
 
                     elif action == 'toggle_hidden':
@@ -273,9 +299,6 @@ class MockWebsocket:
                                     gs['reveal_flashes'] = []
                                 gs['reveal_flashes'].append([cr2, cc3, 'fakeout' if is_f else 'hidden'])
                         needs_broadcast = True
-                        gs['ghost_capture_flash'] = None
-                        gs['ghost_capture_type'] = None
-                        gs['reveal_flashes'] = []
 
                     elif action == 'move':
                         fr, fc = data['fr'], data['fc']
@@ -362,9 +385,6 @@ class MockWebsocket:
                                                 'fakeout': is_fakeout
                                             })
                                     needs_broadcast = True
-                                    gs['ghost_capture_flash'] = None
-                                    gs['ghost_capture_type'] = None
-                                    gs['reveal_flashes'] = []
                             else:
                                 asyncio.create_task(self.queue.put(json.dumps({
                                     "type": "state_update",
@@ -403,9 +423,6 @@ class MockWebsocket:
                         res = ice_king_interaction(gs, kr, kc, tr, tc)
                         if res:
                             needs_broadcast = True
-                            gs['ghost_capture_flash'] = None
-                            gs['ghost_capture_type'] = None
-                            gs['reveal_flashes'] = []
 
                 if needs_broadcast:
                     self._broadcast_state()
@@ -414,6 +431,7 @@ class MockWebsocket:
             raise
     def _broadcast_state(self):
         # Update Firebase and local queue
+        self.last_handled_hash = get_robust_state_hash(self.gs)
         state_json = json.dumps(serialize_state(self.gs, 'server'))
         self.recorder.snapshot('broadcast_state', self.gs, room_code=self.room_code, color=self.color)
         asyncio.create_task(firebase_client.update_state(self.room_code, state_json, self.token, self.color))
@@ -421,6 +439,11 @@ class MockWebsocket:
             "type": "state_update",
             "state": serialize_state(self.gs, self.color)
         })))
+        
+        # Clear ephemeral state after broadcast so it doesn't leak into next state
+        self.gs['ghost_capture_flash'] = None
+        self.gs['ghost_capture_type'] = None
+        self.gs['reveal_flashes'] = []
         
     def _start_listening(self):
         def on_update(state_str):
@@ -441,6 +464,12 @@ class MockWebsocket:
                         # Stale state from polling, ignore
                         return
 
+                new_hash = get_robust_state_hash(new_gs)
+                if self.last_handled_hash == new_hash:
+                    # Ignore echo from our own broadcast
+                    return
+                self.last_handled_hash = new_hash
+
                 self.gs = new_gs
                 # Push to asyncio queue for the client to process
                 asyncio.run_coroutine_threadsafe(
@@ -450,6 +479,9 @@ class MockWebsocket:
                     })),
                     self.loop
                 )
+                self.gs['ghost_capture_flash'] = None
+                self.gs['ghost_capture_type'] = None
+                self.gs['reveal_flashes'] = []
             except Exception as e:
                 self.recorder.dump('state_update_error', exc=e, context={'room_code': self.room_code})
                 print("Error in on_update", e)
