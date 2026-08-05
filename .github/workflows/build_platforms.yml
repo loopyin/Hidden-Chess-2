@@ -42,6 +42,11 @@ jobs:
           export PIP_CONSTRAINT=/tmp/pip-constraint.txt
           buildozer android debug
           
+      - name: Rename APK
+        run: |
+          VERSION=$(jq -r .version package.json)
+          mv bin/*.apk "bin/HiChess-v${VERSION}.apk"
+          
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
