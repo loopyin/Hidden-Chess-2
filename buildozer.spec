@@ -18,7 +18,7 @@ package.domain = org.test
 source.dir = .
 
 # (list) Source files to include (leave empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,wav,ttf,json,ogg,mp3
 
 # (list) List of inclusions using pattern matching
 #source.include_patterns = assets/*,images/*.png
@@ -27,7 +27,7 @@ source.include_exts = py,png,jpg,kv,atlas
 #source.exclude_exts = spec
 
 # (list) List of directory to exclude (leave empty to not exclude anything)
-#source.exclude_dirs = tests, bin, venv
+source.exclude_dirs = tests, bin, venv, .buildozer, node_modules
 
 # (list) List of exclusions using pattern matching
 # Do not prefix with './'
@@ -42,17 +42,17 @@ version = 1.5.405
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy
+requirements = python3,pygame,certifi
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
 # requirements.source.kivy = ../../kivy
 
 # (str) Presplash of the application
-#presplash.filename = %(source.dir)s/data/presplash.png
+presplash.filename = %(source.dir)s/logo.png
 
 # (str) Icon of the application
-#icon.filename = %(source.dir)s/data/icon.png
+icon.filename = %(source.dir)s/icon.png
 
 # (list) Supported orientations
 # Valid options are: landscape, portrait, portrait-reverse, landscape-reverse, or all
@@ -103,16 +103,16 @@ fullscreen = 0
 
 # (list) Permissions
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions.html for all the supported syntaxes and properties)
-#android.permissions = android.permission.INTERNET, (name=android.permission.WRITE_EXTERNAL_STORAGE;maxSdkVersion=18)
+android.permissions = INTERNET
 
 # (list) features (adds uses-feature -tags to manifest)
 #android.features = android.hardware.usb.host
 
 # (int) Target Android API, should be as high as possible.
-#android.api = 33
+android.api = 34
 
 # (int) Minimum API your APK / AAB will support.
-#android.minapi = 24
+android.minapi = 24
 
 # (int) Android SDK version to use
 #android.sdk = 20
@@ -351,7 +351,7 @@ android.allow_backup = True
 
 # (str) Bootstrap to use for android builds
 # Run "buildozer android p4a -- bootstraps" for a list of valid values.
-# p4a.bootstrap = sdl2
+p4a.bootstrap = sdl2
 
 # (int) port number to specify an explicit --port= p4a argument (eg for bootstrap flask)
 #p4a.port =
