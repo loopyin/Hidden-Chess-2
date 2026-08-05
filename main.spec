@@ -28,6 +28,7 @@ exe = EXE(
     a.datas,
     [],
     name='HiChess',
+    icon='icon.png',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
