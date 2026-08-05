@@ -1,6 +1,6 @@
 {
-  "name": "shadow-chess",
-  "version": "1.5.404",
+  "name": "hichess",
+  "version": "1.5.405",
   "description": "HiChess WebSocket server",
   "main": "server.py",
   "scripts": {

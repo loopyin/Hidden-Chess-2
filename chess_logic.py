@@ -133,17 +133,6 @@ def pseudo(b, abs_b, row, fc, ep, cr):
     return mv
 
 def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
-    abs_b = get_absolute_board(gs)
-    target_piece = abs_b[tr][tc]
-    if target_piece is not None and pc(target_piece) == opp(c):
-        return True
-
-    enemy_hidden = gs['hidden_b'] if c == 'w' else gs['hidden_w']
-    for t_pos, h_val in enemy_hidden.items():
-        pub_p = h_val.get('pub_pos') if isinstance(h_val, dict) else getattr(h_val, 'pub_pos', None)
-        if pub_p == (tr, tc):
-            return True
-
     my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
     allied_fake_positions = set()
     for t_pos, h_val in my_hidden.items():
@@ -162,20 +151,20 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
         if tc == 2:
             check_cols.append(1)
         for col in check_cols:
-            if (fr, col) in enemy_hidden or (fr, col) in allied_fake_positions:
+            if (fr, col) in allied_fake_positions:
                 return True
     elif t not in ('N', 'K'):
         dr, dc = get_dir(fr, tr), get_dir(fc, tc)
         r, cc = fr + dr, fc + dc
         while 0 <= r < 8 and 0 <= cc < 8:
-            if (r, cc) in enemy_hidden or (r, cc) in allied_fake_positions:
+            if (r, cc) in allied_fake_positions:
                 return True
             if (r, cc) == (tr, tc):
                 break
             r += dr
             cc += dc
     else:
-        if (tr, tc) in enemy_hidden or (tr, tc) in allied_fake_positions:
+        if (tr, tc) in allied_fake_positions:
             return True
 
     if t == 'P' and fc != tc:
@@ -218,7 +207,33 @@ def legal(gs, row, fc, as_fakeout=False, return_visual=False, ui_selection=False
         fake_abs = cpb(abs_b)
         fake_abs[start_r][start_c] = p
 
-        for tr, tc in pseudo(fake_tb, fake_abs, start_r, start_c, gs['ep'], gs['cr']):
+        normal_pseudo = pseudo(fake_tb, fake_abs, start_r, start_c, gs['ep'], gs['cr'])
+        pierced_pseudo = []
+        
+        pts = gs.get('pts', {}).get(c, 0)
+        enemy_hidden = gs.get('hidden_b', {}) if c == 'w' else gs.get('hidden_w', {})
+        if isinstance(pts, (int, float)) and pts >= 1:
+            has_illusions = False
+            pierce_b = cpb(fake_tb)
+            if ui_selection:
+                for r in range(8):
+                    for col_idx in range(8):
+                        pc_target = pierce_b[r][col_idx]
+                        if pc_target and pc(pc_target) != c:
+                            pierce_b[r][col_idx] = None
+                            has_illusions = True
+            else:
+                for val in enemy_hidden.values():
+                    if val.pub_pos:
+                        pierce_b[val.pub_pos[0]][val.pub_pos[1]] = None
+                        has_illusions = True
+            if has_illusions:
+                for tr, tc in pseudo(pierce_b, fake_abs, start_r, start_c, gs['ep'], gs['cr']):
+                    if (tr, tc) not in normal_pseudo:
+                        pierced_pseudo.append((tr, tc))
+
+        visual_res = []
+        for tr, tc in normal_pseudo + pierced_pseudo:
             if (tr, tc) in my_hidden:
                 continue
 
@@ -241,7 +256,44 @@ def legal(gs, row, fc, as_fakeout=False, return_visual=False, ui_selection=False
                     nb_check[hr][hc] = ghost
             if not in_check(nb_check, c):
                 res.append((tr, tc))
-        return (res, res) if return_visual else res
+                if (tr, tc) in normal_pseudo:
+                    visual_res.append((tr, tc))
+
+        f_res = []
+        f_vis = []
+        is_fake = gs.get('fakeout_active') or as_fakeout
+        fcst = fakeout_cost(gs) if is_fake else 0
+        p_pts = gs.get('pts', {}).get(c, 0)
+        if not isinstance(p_pts, (int, float)):
+            p_pts = 0
+            
+        for (tr, tc) in res:
+            expected_cost = fcst
+            is_ghost = False
+            for val in enemy_hidden.values():
+                if val.pub_pos == (tr, tc):
+                    is_ghost = True
+                    break
+            if (tr, tc) in pierced_pseudo:
+                expected_cost += 1
+            elif is_fake and is_ghost:
+                expected_cost += 1
+            
+            cap_p = abs_b[tr][tc]
+            is_opponent = cap_p and pc(cap_p) != c
+            if is_fake and is_opponent and not is_ghost:
+                expected_cost += 999
+            
+            if p_pts >= expected_cost:
+                f_res.append((tr, tc))
+            if (tr, tc) in visual_res:
+                visual_target = gs['board'][tr][tc]
+                if is_fake and visual_target and pc(visual_target) != c:
+                    f_vis.append((tr, tc))
+                elif p_pts >= expected_cost:
+                    f_vis.append((tr, tc))
+        return (f_res, f_vis) if return_visual else f_res
+
 
     normal_pseudo = pseudo(tb, abs_b, row, fc, gs['ep'], gs['cr'])
     pierced_pseudo = []
@@ -297,9 +349,42 @@ def legal(gs, row, fc, as_fakeout=False, return_visual=False, ui_selection=False
             res.append((tr, tc))
             if (tr, tc) in normal_pseudo:
                 visual_res.append((tr, tc))
-    if return_visual:
-        return res, visual_res
-    return res
+
+    f_res = []
+    f_vis = []
+    is_fake = gs.get('fakeout_active') or as_fakeout
+    fcst = fakeout_cost(gs) if is_fake else 0
+    p_pts = gs.get('pts', {}).get(c, 0)
+    if not isinstance(p_pts, (int, float)):
+        p_pts = 0
+            
+    for (tr, tc) in res:
+        expected_cost = fcst
+        is_ghost = False
+        for val in enemy_hidden.values():
+            if val.pub_pos == (tr, tc):
+                is_ghost = True
+                break
+        if (tr, tc) in pierced_pseudo:
+            expected_cost += 1
+        elif is_fake and is_ghost:
+            expected_cost += 1
+        
+        cap_p = abs_b[tr][tc]
+        is_opponent = cap_p and pc(cap_p) != c
+        if is_fake and is_opponent and not is_ghost:
+            expected_cost += 999
+            
+        if p_pts >= expected_cost:
+            f_res.append((tr, tc))
+        if (tr, tc) in visual_res:
+            visual_target = gs['board'][tr][tc]
+            if is_fake and visual_target and pc(visual_target) != c:
+                f_vis.append((tr, tc))
+            elif p_pts >= expected_cost:
+                f_vis.append((tr, tc))
+    return (f_res, f_vis) if return_visual else f_res
+
 
 def all_legal(gs):
     c = gs['turn']
@@ -676,7 +761,7 @@ def end_turn(gs, process_queue=False):
                 winner = l
                 pts_l = str(int(gs['pts'][l])) if gs['pts'][l] == int(gs['pts'][l]) else f"{round(gs['pts'][l], 2)}"
                 pts_w = str(int(gs['pts'][w])) if gs['pts'][w] == int(gs['pts'][w]) else f"{round(gs['pts'][w], 2)}"
-                reason = f"por maior estoque de pontos ({pts_l} vs {pts_w})!"
+                reason = f"por maior estoque de grãos ({pts_l} vs {pts_w})!"
             else:
                 winner = w
                 reason = "por xeque-mate!"
@@ -916,6 +1001,34 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
             r += dr
             cc += dc
             
+    ghost_found = None
+    ghost_is_mine = False
+    
+    for t_pos, val in enemy_hidden.items():
+        if val.pub_pos == (tr, tc):
+            ghost_found = t_pos
+            break
+            
+    if not ghost_found:
+        for t_pos, val in my_hidden.items():
+            if val.pub_pos == (tr, tc) and t_pos != (fr, fc):
+                ghost_found = t_pos
+                ghost_is_mine = True
+                break
+
+    expected_cost = 0
+    if is_fakeout:
+        expected_cost += fakeout_cost(gs)
+    
+    if pierced_illusions:
+        expected_cost += 1
+        
+    if ghost_found and not ghost_is_mine and is_fakeout:
+        expected_cost += 1
+
+    if gs['pts'].get(c, 0) < expected_cost:
+        return False
+
     if pierced_illusions:
         gs['pts'][c] = round(gs['pts'].get(c, 0) - 1, 2)
         if not hidden_move:
@@ -934,23 +1047,6 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
                         gs['reveal_flashes'] = []
                     gs['reveal_flashes'].append([r, cc, 'fakeout' if is_f else 'hidden'])
 
-    # Check if this is a capture against the old position of an opposing piece (ghost piece)
-    # OR moving onto the pub_pos of an allied illusory piece
-    ghost_found = None
-    ghost_is_mine = False
-    
-    for t_pos, val in enemy_hidden.items():
-        if val.pub_pos == (tr, tc):
-            ghost_found = t_pos
-            break
-            
-    if not ghost_found:
-        for t_pos, val in my_hidden.items():
-            if val.pub_pos == (tr, tc) and t_pos != (fr, fc):
-                ghost_found = t_pos
-                ghost_is_mine = True
-                break
-
     if ghost_found is not None:
         # A ghost capture occurred!
         # 1. The captured piece disappears from the public board
@@ -968,6 +1064,9 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
             if 'frozen_pieces' in gs:
                 gs['frozen_pieces'].discard((tr, tc))
             
+            if is_fakeout:
+                gs['pts'][c] = round(gs['pts'].get(c, 0) - 1, 2)
+            
         # 3. Add to the log
         if is_f:
             gs['log'].append(f"SYS_FAKEOUT|Ilusão desfeita em {alg(tc, tr)}!")
@@ -975,11 +1074,16 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
             gs['log'].append(f"SYS_HIDDEN|Ilusão desfeita em {alg(tc, tr)}!")
             
         if pt(p) == 'P' and fc != tc:
-            # 4. Set the ghost_capture_flash coordinate
-            gs['ghost_capture_flash'] = (tr, tc)
-            gs['ghost_capture_type'] = 'fakeout' if is_f else 'hidden'
-            # 5. Return a special status "ghost_capture" and keep the active player's turn to redo their move.
-            return "ghost_capture"
+            if is_fakeout and not ghost_is_mine:
+                if 'reveal_flashes' not in gs:
+                    gs['reveal_flashes'] = []
+                gs['reveal_flashes'].append([tr, tc, 'fakeout' if is_f else 'hidden'])
+            else:
+                # 4. Set the ghost_capture_flash coordinate
+                gs['ghost_capture_flash'] = (tr, tc)
+                gs['ghost_capture_type'] = 'fakeout' if is_f else 'hidden'
+                # 5. Return a special status "ghost_capture" and keep the active player's turn to redo their move.
+                return "ghost_capture"
         else:
             if 'reveal_flashes' not in gs:
                 gs['reveal_flashes'] = []
@@ -1042,6 +1146,24 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
 
     cap_true = abs_b[tr][tc]
     if cap_true and pc(cap_true) != c:
+        if gs.get('fakeout_active'):
+            # Illusion collided with an enemy real piece!
+            # It should pop (be revealed).
+            if (fr, fc) in my_hidden:
+                val = my_hidden.pop((fr, fc))
+                old_pub_pos = val.pub_pos
+                _register_revealed_trail(gs, val)
+                deactivate_plies(gs, val.plies)
+                if old_pub_pos:
+                    board[old_pub_pos[0]][old_pub_pos[1]] = None
+                board[fr][fc] = val.piece
+                gs['log'].append(f"SYS_FAKEOUT|Peça oculta avistada em {alg(fc, fr)}!")
+                if 'reveal_flashes' not in gs:
+                    gs['reveal_flashes'] = []
+                gs['reveal_flashes'].append([fr, fc, 'fakeout'])
+            gs['fakeout_active'] = False
+            return False
+
         gs['pts'][c] = round(gs['pts'][c] + VALUES.get(pt(cap_true), 0), 2)
         enemy_captured = gs['captured_w'] if c == 'b' else gs['captured_b']
         enemy_captured.add((tr, tc))
@@ -1191,9 +1313,18 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         if (fr, fc) in my_hidden:
             val = my_hidden.pop((fr, fc))
             pub_pos = val.pub_pos
+            is_f = val.is_fakeout
             if pub_pos: board[pub_pos[0]][pub_pos[1]] = None
             deactivate_plies(gs, val.plies)
             _register_revealed_trail(gs, val)
+            
+            if is_f:
+                gs['log'].append(f"SYS_FAKEOUT|Peça oculta avistada em {alg(fc, fr)}!")
+            else:
+                gs['log'].append(f"SYS_HIDDEN|Peça oculta avistada em {alg(fc, fr)}!")
+            if 'reveal_flashes' not in gs:
+                gs['reveal_flashes'] = []
+            gs['reveal_flashes'].append([fr, fc, 'fakeout' if is_f else 'hidden'])
 
         for t_pos, val in enemy_hidden.items():
             p_pos = val.pub_pos
@@ -1375,7 +1506,9 @@ def serialize_state(gs, player_color=None, dgs=None):
                         'drafted_turn': drafted_turn
                     })
             elif color == player_color:
-                txt = f"{note} (-{cost}pt)"
+                cost_val = float(cost) if str(cost).replace('.','',1).isdigit() else 0
+                grao_word = "grão" if cost_val == 1.0 else "grãos"
+                txt = f"{note} (-{cost} {grao_word})"
                 classified_entries.append({
                 'original': entry,
                     'type': 'HIDDEN',
@@ -1408,7 +1541,9 @@ def serialize_state(gs, player_color=None, dgs=None):
                         'drafted_turn': drafted_turn
                     })
             elif color == player_color:
-                txt = f"{note} (-{cost}pt)"
+                cost_val = float(cost) if str(cost).replace('.','',1).isdigit() else 0
+                grao_word = "grão" if cost_val == 1.0 else "grãos"
+                txt = f"{note} (-{cost} {grao_word})"
                 classified_entries.append({
                 'original': entry,
                     'type': 'FAKEOUT',

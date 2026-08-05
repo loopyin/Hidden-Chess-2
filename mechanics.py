@@ -138,10 +138,10 @@ class MechanicsManager:
             if gs.get('hidden_mode'):
                 gs['fakeout_active'] = False
                     
-        if (is_now_hidden or force_shockwave) and click_pos:
+        if is_now_hidden and click_pos:
             if 'shockwaves' not in client_state: client_state['shockwaves'] = []
             mx, my = click_pos
-            sq_size = 50
+            sq_size = 560 // 8
             sq_center_x = (mx // sq_size) * sq_size + sq_size // 2
             sq_center_y = (my // sq_size) * sq_size + sq_size // 2
             client_state['shockwaves'].append({
@@ -182,10 +182,10 @@ class MechanicsManager:
             if gs.get('fakeout_active'):
                 gs['hidden_mode'] = False
                     
-        if (is_now_fakeout or force_shockwave) and click_pos:
+        if is_now_fakeout and click_pos:
             if 'shockwaves' not in client_state: client_state['shockwaves'] = []
             mx, my = click_pos
-            sq_size = 50
+            sq_size = 560 // 8
             sq_center_x = (mx // sq_size) * sq_size + sq_size // 2
             sq_center_y = (my // sq_size) * sq_size + sq_size // 2
             client_state['shockwaves'].append({
